@@ -3,12 +3,12 @@
   "name": "FluxCD (Kubernetes)",
   "codeowners": ["@turbo5000c"],
   "config_flow": true,
+  "dependencies": [],
   "documentation": "https://github.com/dawg-io/homeassistant-fluxcd",
-  "issue_tracker": "https://github.com/dawg-io/homeassistant-fluxcd/issues",
   "integration_type": "hub",
   "iot_class": "local_polling",
-  "version": "0.1.5",
-  "dependencies": [],
+  "issue_tracker": "https://github.com/dawg-io/homeassistant-fluxcd/issues",
+  "loggers": ["kubernetes_asyncio"],
   "requirements": ["kubernetes-asyncio==35.0.1"],
-  "loggers": ["kubernetes_asyncio"]
+  "version": "0.1.5"
 }

@@ -1,14 +1,14 @@
 # Home Assistant integration for FluxCD GitOps status and resources
 
-A custom Home Assistant integration that monitors **FluxCD resources in Kubernetes** using **kubernetes-asyncio**. It exposes FluxCD resource status as individual Home Assistant sensor entities, each representing a single FluxCD resource, with **category** (Sources / Deployments) and **resource type** provided as attributes.
+A custom Home Assistant integration that monitors **FluxCD resources in Kubernetes** using **kubernetes-asyncio**. It exposes FluxCD resource status as Home Assistant sensor entities, each appearing as its own top-level device in the HA device registry.
 
 ## Features
 
 - **Async-first design** using `kubernetes-asyncio`
 - **DataUpdateCoordinator** for efficient polling
 - **Config flow** for easy UI-based setup
-- **Category attribute** — each resource is labeled as either *Source* or *Deployment*
-- Monitors **12 FluxCD resource types** across the two categories
+- Monitors **12 FluxCD CRD resource types** across Sources and Deployments
+- **Controller monitoring** — monitors FluxCD controller Deployments (source-controller, kustomize-controller, helm-controller, notification-controller, image-reflector-controller, image-automation-controller)
 - Supports **in-cluster** and **kubeconfig** authentication
 - **Namespace scoping** — monitor a single namespace or all namespaces
 - **Label selector** filtering for targeted monitoring
@@ -39,109 +39,195 @@ A custom Home Assistant integration that monitors **FluxCD resources in Kubernet
 | Kustomization | `kustomize.toolkit.fluxcd.io/v1` | Deployment reconcile status, last applied revision |
 | ResourceSet | `fluxcd.controlplane.io/v1` | Templated resource deployment |
 
+### Controllers
+
+| Resource | Source | Purpose |
+|---|---|---|
+| ControllerComponent | Kubernetes Deployment (`apps/v1`) | FluxCD controller Deployment health (source-controller, kustomize-controller, helm-controller, notification-controller, image-reflector-controller, image-automation-controller) |
+
 ## Sensor States
 
 Each FluxCD resource is represented as a sensor entity with one of these states:
 
 - `ready` — The resource is reconciled and healthy
 - `not_ready` — The resource has a failing condition
-- `progressing` — The resource is reconciling or in the process of becoming ready
-- `suspended` — The resource is intentionally paused and not reconciling
-- `degraded` — The controller component is running but in a degraded or partially functional state
+- `progressing` — The resource is actively reconciling (Reconciling condition is True)
+- `suspended` — The resource is suspended (`spec.suspend: true`)
+- `degraded` — Some but not all controller replicas are available (ControllerComponent only)
 - `unknown` — The resource status cannot be determined
 
-## Entity Attributes
+## Entity Attributes and Diagnostic Sensors
 
-### Common Attributes (all resource types)
+Each FluxCD resource has a primary **Status** sensor with state attributes, plus several **Diagnostic** sensors that surface low-level detail. Diagnostic sensors appear in the "Diagnostic" section of the HA device page.
 
-- `category` — Resource category (Sources, Deployments)
+### Common Attributes (all resource types — primary Status sensor)
+
+- `category` — Resource category (`sources`, `deployments`, `controllers`)
 - `kind` — Resource type (GitRepository, Kustomization, etc.)
 - `namespace` — Kubernetes namespace
 - `resource_name` — Resource name
-- `suspend` — Whether the resource is suspended
+- `suspended` — Whether the resource is suspended
 - `message` — Status message from the Ready condition
 - `reason` — Reason from the Ready condition
-- `last_reconcile_time` — Timestamp of the last reconciliation
-- `observed_generation` — Last observed generation
-- `conditions` — Full list of status conditions
+- `reconcile_time` — Timestamp of the last reconciliation
 
-### GitRepository Attributes
+### Common Diagnostic Sensors (all resource types)
 
+- `Ready Condition` — Boolean value of the `Ready` condition
+- `Observed Generation` — Last observed generation from status
+
+### GitRepository
+
+**Primary attributes:**
 - `url` — Git repository URL
 - `branch` / `tag` / `semver` / `commit` — Git reference details
-- `artifact_revision` — Last fetched artifact revision
-- `interval` — Sync interval
+- `summary` — Human-readable summary (e.g., `"my-repo main from https://github.com/org/repo"`)
 
-### Kustomization Attributes
+**Diagnostic sensors:**
+- `Interval` — Sync interval
+- `Artifact Revision` — Last fetched artifact revision
 
+### Kustomization
+
+**Primary attributes:**
 - `path` — Kustomize path
 - `prune` — Whether pruning is enabled
-- `interval` — Reconciliation interval
-- `last_applied_revision` — Last successfully applied revision
-- `source_ref_kind` / `source_ref_name` — Source reference details
+- `source` — Formatted source reference (e.g., `"GitRepository/flux-system/my-repo"`)
+- `source_ref_kind` / `source_ref_name` / `source_ref_namespace` — Source reference details
+- `source_entity_id` / `source_device_id` — HA entity/device IDs for the linked source (resolved at runtime)
+- `summary` — Human-readable summary
 
-### HelmRelease Attributes
+**Diagnostic sensors:**
+- `Interval` — Reconciliation interval
+- `Last Applied Revision` — Last successfully applied revision
 
+### HelmRelease
+
+**Primary attributes:**
 - `chart_name` / `chart_version` — Helm chart details
-- `source_ref_kind` / `source_ref_name` — Chart source reference
-- `interval` — Reconciliation interval
-- `last_applied_revision` — Last applied chart revision
-- `last_attempted_revision` — Last attempted chart revision
+- `source` — Formatted source reference
+- `source_ref_kind` / `source_ref_name` / `source_ref_namespace` — Chart source reference (for inline `spec.chart.spec.sourceRef`)
+- `chart_ref_kind` / `chart_ref_name` / `chart_ref_namespace` — Direct HelmChart reference (Flux v2.3+ `spec.chartRef`)
+- `source_entity_id` / `source_device_id` — Resolved HA entity/device for the source
+- `chart_entity_id` / `chart_device_id` — Resolved HA entity/device for the HelmChart (when `chart_ref_kind` is set)
+- `summary` — Human-readable summary
 
-### HelmRepository Attributes
+**Diagnostic sensors:**
+- `Interval` — Reconciliation interval
+- `Last Applied Revision` — Last applied chart revision
 
+### HelmRepository
+
+**Primary attributes:**
 - `url` — Helm repository URL
-- `repo_type` — Repository type
-- `interval` — Sync interval
-- `artifact_revision` — Last fetched artifact revision
+- `repo_type` — Repository type (default, oci)
+- `summary` — Human-readable summary
 
-### HelmChart Attributes
+**Diagnostic sensors:**
+- `Interval` — Sync interval
+- `Artifact Revision` — Last fetched artifact revision
 
+### HelmChart
+
+**Primary attributes:**
 - `chart` — Chart name
 - `version` — Version constraint
-- `source_ref_kind` / `source_ref_name` — Source reference
-- `artifact_revision` — Fetched chart revision
+- `source` — Formatted source reference
+- `source_ref_kind` / `source_ref_name` / `source_ref_namespace` — Source reference
+- `source_entity_id` / `source_device_id` — Resolved HA entity/device for the source
+- `summary` — Human-readable summary
 
-### Bucket Attributes
+**Diagnostic sensors:**
+- `Interval` — Sync interval
+- `Artifact Revision` — Fetched chart revision
 
+### Bucket
+
+**Primary attributes:**
 - `bucket_name` — S3 bucket name
 - `endpoint` — Bucket endpoint URL
 - `provider` — Cloud provider (aws, gcp, generic)
 - `region` — Bucket region
-- `artifact_revision` — Fetched artifact revision
+- `prefix` — Object prefix filter
+- `summary` — Human-readable summary
 
-### OCIRepository Attributes
+**Diagnostic sensors:**
+- `Interval` — Sync interval
+- `Artifact Revision` — Fetched artifact revision
 
+### OCIRepository
+
+**Primary attributes:**
 - `url` — OCI repository URL
 - `tag` / `semver` / `digest` — OCI reference details
-- `artifact_revision` — Fetched artifact revision
+- `summary` — Human-readable summary
 
-### FluxInstance Attributes
+**Diagnostic sensors:**
+- `Interval` — Sync interval
+- `Artifact Revision` — Fetched artifact revision
 
+### FluxInstance
+
+**Primary attributes:**
 - `distribution_version` — Flux distribution version
 - `distribution_registry` — Flux distribution registry
 - `cluster_domain` — Cluster domain
-- `last_applied_revision` / `last_attempted_revision` — Revision info
+- `summary` — Human-readable summary (e.g., `"FluxCD v2.3.0"`)
 
-### ResourceSet Attributes
+**Diagnostic sensors:**
+- `Last Applied Revision` — Last successfully applied revision
 
-- `input_ref_kind` / `input_ref_name` — Input reference details
-- `interval` — Reconciliation interval
+### ResourceSet
 
-### ArtifactGenerator Attributes
+**Primary attributes:**
+- `source` — Formatted input reference
+- `source_ref_kind` / `source_ref_name` — Input reference details
+- `source_entity_id` / `source_device_id` — Resolved HA entity/device for the input provider
+- `summary` — Human-readable summary
 
-- `interval` — Generation interval
-- `artifact_revision` — Generated artifact revision
+**Diagnostic sensors:**
+- `Interval` — Reconciliation interval
 
-### ExternalArtifact Attributes
+### ArtifactGenerator
 
+**Diagnostic sensors:**
+- `Interval` — Generation interval
+- `Artifact Revision` — Generated artifact revision
+
+### ExternalArtifact
+
+**Primary attributes:**
 - `url` — External artifact URL
-- `interval` — Fetch interval
-- `artifact_revision` — Fetched artifact revision
+- `summary` — Human-readable summary
 
-### ResourceSetInputProvider Attributes
+**Diagnostic sensors:**
+- `Interval` — Fetch interval
+- `Artifact Revision` — Fetched artifact revision
 
-- `resource_ref_kind` / `resource_ref_name` / `resource_ref_namespace` — Resource reference details
+### ResourceSetInputProvider
+
+**Primary attributes:**
+- `source` — Formatted resource reference
+- `summary` — Human-readable summary derived from the source
+- `source_ref_kind` / `source_ref_name` / `source_ref_namespace` — Resource reference details
+- `source_entity_id` / `source_device_id` — Resolved HA entity/device for the referenced resource
+
+### ControllerComponent
+
+FluxCD controller Deployments (e.g., source-controller, kustomize-controller) are monitored as `ControllerComponent` resources in the `controllers` category.
+
+**Primary attributes:**
+- `desired_replicas` — Expected number of replicas
+- `ready_replicas` — Currently ready replicas
+- `available_replicas` — Currently available replicas
+- `version` — Container image tag (e.g., `v2.3.0`)
+
+**Diagnostic sensors:**
+- `Ready Condition` — Boolean value of the `Ready` condition (may be `unknown` if the Deployment only exposes `Available`/`Progressing` conditions)
+- `Observed Generation` — Last observed generation
+- `Desired Replicas` — Expected replica count
+- `Ready Replicas` — Ready replica count
+- `Available Replicas` — Available replica count
 
 ## Installation
 
@@ -187,6 +273,22 @@ This creates a `ClusterRole` with `get`, `list`, and `watch` permissions on:
 
 Edit the `ClusterRoleBinding` subject to match your Home Assistant service account.
 
+> **Note:** Controller component monitoring (source-controller, kustomize-controller, etc.)
+> requires `get` and `list` access to `deployments` in the `apps` API group for the
+> `flux-system` namespace. If your service account does not have this permission the
+> integration will still start, but controller entities will not appear. Add the following
+> rule to the ClusterRole in `rbac.yaml` if you want controller monitoring:
+>
+> ```yaml
+> - apiGroups:
+>     - apps
+>   resources:
+>     - deployments
+>   verbs:
+>     - get
+>     - list
+> ```
+
 ## Project Structure
 
 ```
@@ -208,12 +310,11 @@ custom_components/fluxcd_k8s/
 
 ### Resource Grouping by Category
 
-Resources are organized into two categories:
+Resources carry a `category` attribute that is exposed as a sensor attribute:
 
 - **Sources** — Resources that define where configuration comes from (GitRepository, HelmRepository, HelmChart, Bucket, OCIRepository, ArtifactGenerator, ExternalArtifact, ResourceSetInputProvider)
 - **Deployments** — Resources that apply configuration to the cluster (FluxInstance, HelmRelease, Kustomization, ResourceSet)
-
-Each resource carries its `category` as metadata, which is exposed as a sensor attribute.
+- **Controllers** — FluxCD controller Deployments (source-controller, kustomize-controller, helm-controller, notification-controller, image-reflector-controller, image-automation-controller)
 
 ### Querying FluxCD Resources
 
@@ -221,6 +322,7 @@ The integration uses `kubernetes_asyncio.client.CustomObjectsApi` to explicitly 
 
 - **Namespaced queries**: `list_namespaced_custom_object(group, version, namespace, plural)`
 - **Cluster-wide queries**: `list_cluster_custom_object(group, version, plural)`
+- **Controller Deployments**: `AppsV1Api.list_namespaced_deployment(namespace="flux-system")`
 
 **Grouped fetch functions:**
 - `async_fetch_sources()` — Fetches all Source category resources
@@ -232,15 +334,17 @@ The integration uses `kubernetes_asyncio.client.CustomObjectsApi` to explicitly 
 
 ### Entity Organization
 
-Each FluxCD resource becomes a Home Assistant sensor entity. Entities are grouped by:
+Each FluxCD resource becomes its own top-level **device** in Home Assistant. Each device exposes:
+- A primary **Status** sensor (the resource's ready state)
+- Several **Diagnostic** sensors (interval, revision, replica counts, etc.)
 
-1. **Category** (Sources / Deployments)
-2. **Resource type** (GitRepository, Kustomization, etc.)
+Device names use the format `{namespace}/{name} ({resource type})`. Including the resource type prevents display name collisions when multiple resource kinds share the same namespace and name (e.g., a HelmRelease and a HelmRepository both named `traefik/traefik`).
 
-Example entity names:
-- `flux-system/my-repo` (Sources / Git Repositories)
-- `flux-system/my-app` (Deployments / Kustomizations)
-- `flux-system/flux` (Deployments / Flux Instances)
+Example device names:
+- `flux-system/my-repo (Git Repositories)`
+- `flux-system/my-app (Kustomizations)`
+- `flux-system/flux (Flux Instances)`
+- `flux-system/source-controller (Flux Controller)`
 
 ### Status Normalization
 
@@ -248,8 +352,12 @@ FluxCD resources store status in `status.conditions` as a list of condition obje
 
 1. Parses all conditions from the resource status
 2. Finds the `Ready` condition
-3. Maps `status: "True"` → `ready`, `status: "False"` → `not_ready`, otherwise → `unknown`
-4. Extracts kind-specific attributes from `.spec` and `.status`
+3. Checks for an active `Reconciling` condition to detect `progressing` state
+4. Maps `status: "True"` → `ready`, `status: "False"` → `not_ready`, otherwise → `unknown`
+5. Overrides with `suspended` when `spec.suspend: true`
+6. Extracts kind-specific attributes from `.spec` and `.status`
+
+For controller Deployments, status is derived from replica counts and the Deployment's `Available`/`Progressing` conditions.
 
 ### Polling
 
@@ -257,7 +365,13 @@ A single `DataUpdateCoordinator` polls all resource kinds on the configured inte
 
 ## Lovelace Dashboard Examples
 
-> **Note:** Entity IDs are generated by Home Assistant from the device name (`{namespace}/{name}`) and the sensor name (`Status`). For example, a resource in namespace `flux-system` named `my-repo` produces entity ID `sensor.flux_system_my_repo_status`. Adjust the entity IDs below to match your actual cluster resources.
+> **Note:** Entity IDs are generated by Home Assistant from the device name
+> (`{namespace}/{name} ({resource type})`) and the sensor name (`Status`).
+> For example, a GitRepository in namespace `flux-system` named `my-repo` produces
+> entity ID `sensor.flux_system_my_repo_git_repositories_status`. A Kustomization
+> with the same namespace/name produces `sensor.flux_system_my_repo_kustomizations_status`.
+> Adjust the entity IDs below to match your actual cluster resources — you can find
+> the exact IDs in **Settings → Devices & Services → FluxCD**.
 
 ### Glance Card — Quick Status Overview
 
@@ -369,19 +483,19 @@ Show the last fetched artifact revision alongside the ready state for source res
 type: entities
 title: FluxCD Sources
 entities:
-  - entity: sensor.flux_system_flux_system_status
+  - entity: sensor.flux_system_flux_system_git_repositories_status
     name: flux-system (GitRepository)
-  - entity: sensor.flux_system_flux_system_artifact_revision
+  - entity: sensor.flux_system_flux_system_git_repositories_artifact_revision
     name: Artifact Revision
-  - entity: sensor.flux_system_flux_system_interval
+  - entity: sensor.flux_system_flux_system_git_repositories_interval
     name: Sync Interval
-  - entity: sensor.flux_system_bitnami_status
+  - entity: sensor.flux_system_bitnami_helm_repositories_status
     name: bitnami (HelmRepository)
-  - entity: sensor.flux_system_bitnami_artifact_revision
+  - entity: sensor.flux_system_bitnami_helm_repositories_artifact_revision
     name: Artifact Revision
 ```
 
-> **Tip:** Diagnostic sensor entity IDs follow the pattern `sensor.{namespace}_{name}_{attribute}`. For example, the `Artifact Revision` diagnostic sensor for `flux-system/flux-system` becomes `sensor.flux_system_flux_system_artifact_revision`.
+> **Tip:** Diagnostic sensor entity IDs follow the pattern `sensor.{namespace}_{name}_{resource_type}_{attribute}`. For example, the `Artifact Revision` diagnostic sensor for the GitRepository `flux-system/flux-system` becomes `sensor.flux_system_flux_system_git_repositories_artifact_revision`.
 
 ### FluxCD Component Health Card
 
@@ -494,13 +608,15 @@ entities:
     name: Message
 ```
 
-> **Note:** Controller Kustomization entity IDs depend on how Flux is installed in your cluster. If Flux was bootstrapped with the default names, the entities will follow the `sensor.flux_system_{controller_name}_status` pattern shown above.
+> **Note:** Controller Kustomization entity IDs depend on how Flux is installed in your cluster. If Flux was bootstrapped with the default names, the entities will follow the `sensor.flux_system_{controller_name}_kustomizations_status` pattern.
+>
+> Controller **Deployment** entities (ControllerComponent kind) follow the pattern `sensor.flux_system_{controller_name}_flux_controller_status`.
 >
 > To find your actual controller names, run:
 > ```bash
 > kubectl get kustomizations -n flux-system
 > ```
-> Convert each name to a sensor entity ID by replacing hyphens and slashes with underscores and appending `_status`. For example, a Kustomization named `helm-controller` in `flux-system` becomes `sensor.flux_system_helm_controller_status`.
+> Convert each name to a sensor entity ID by replacing hyphens and slashes with underscores, appending the resource type slug, and then `_status`. For example, a Kustomization named `helm-controller` in `flux-system` becomes `sensor.flux_system_helm_controller_kustomizations_status`.
 
 ## Requirements
 

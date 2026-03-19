@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
+import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -25,23 +25,18 @@ from .const import (
 )
 from .coordinator import FluxCDCoordinator
 
-if TYPE_CHECKING:
-    from homeassistant.helpers.typing import ConfigType
-
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the FluxCD component."""
-    hass.data.setdefault(DOMAIN, {})
-    return True
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up FluxCD from a config entry."""
     _LOGGER.debug("Setting up %s integration", DOMAIN)
+
+    hass.data.setdefault(DOMAIN, {})
 
     # Create the Kubernetes API client
     k8s_client = FluxKubernetesClient(
