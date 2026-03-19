@@ -45,6 +45,9 @@ Each FluxCD resource is represented as a sensor entity with one of these states:
 
 - `ready` — The resource is reconciled and healthy
 - `not_ready` — The resource has a failing condition
+- `progressing` — The resource is reconciling or in the process of becoming ready
+- `suspended` — The resource is intentionally paused and not reconciling
+- `degraded` — The controller component is running but in a degraded or partially functional state
 - `unknown` — The resource status cannot be determined
 
 ## Entity Attributes
