@@ -1,14 +1,14 @@
 # Home Assistant integration for FluxCD GitOps status and resources
 
-A custom Home Assistant integration that monitors **FluxCD resources in Kubernetes** using **kubernetes-asyncio**. It exposes FluxCD resource status as Home Assistant sensor entities, grouped by **category** (Sources / Deployments) and **resource type**.
+A custom Home Assistant integration that monitors **FluxCD resources in Kubernetes** using **kubernetes-asyncio**. It exposes FluxCD resource status as individual Home Assistant sensor entities, each representing a single FluxCD resource, with **category** (Sources / Deployments) and **resource type** provided as attributes.
 
 ## Features
 
 - **Async-first design** using `kubernetes-asyncio`
 - **DataUpdateCoordinator** for efficient polling
 - **Config flow** for easy UI-based setup
-- **Category-based grouping** — resources are organized into *Sources* and *Deployments*
-- Monitors **12 FluxCD resource types** across both categories
+- **Category attribute** — each resource is labeled as either *Source* or *Deployment*
+- Monitors **12 FluxCD resource types** across the two categories
 - Supports **in-cluster** and **kubeconfig** authentication
 - **Namespace scoping** — monitor a single namespace or all namespaces
 - **Label selector** filtering for targeted monitoring
