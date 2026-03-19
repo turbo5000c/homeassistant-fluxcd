@@ -1,0 +1,78 @@
+# Kubernetes RBAC for FluxCD Home Assistant Integration
+#
+# This manifest grants read-only access to FluxCD custom resources.
+# Apply this to the namespace where the Home Assistant service account runs,
+# or use a ClusterRoleBinding for cluster-wide access.
+#
+# Usage:
+#   kubectl apply -f rbac.yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fluxcd-hass-reader
+rules:
+  # Sources: GitRepository, HelmRepository, HelmChart, Bucket,
+  # OCIRepository, ArtifactGenerator, ExternalArtifact
+  # (source.toolkit.fluxcd.io)
+  - apiGroups:
+      - source.toolkit.fluxcd.io
+    resources:
+      - gitrepositories
+      - helmrepositories
+      - helmcharts
+      - buckets
+      - ocirepositories
+      - artifactgenerators
+      - externalartifacts
+    verbs:
+      - get
+      - list
+      - watch
+
+  # Deployments: Kustomization (kustomize.toolkit.fluxcd.io)
+  - apiGroups:
+      - kustomize.toolkit.fluxcd.io
+    resources:
+      - kustomizations
+    verbs:
+      - get
+      - list
+      - watch
+
+  # Deployments: HelmRelease (helm.toolkit.fluxcd.io)
+  - apiGroups:
+      - helm.toolkit.fluxcd.io
+    resources:
+      - helmreleases
+    verbs:
+      - get
+      - list
+      - watch
+
+  # Flux Operator: FluxInstance, ResourceSet, ResourceSetInputProvider
+  # (fluxcd.controlplane.io)
+  - apiGroups:
+      - fluxcd.controlplane.io
+    resources:
+      - fluxinstances
+      - resourcesets
+      - resourcesetinputproviders
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fluxcd-hass-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fluxcd-hass-reader
+subjects:
+  # Replace with your service account details
+  - kind: ServiceAccount
+    name: home-assistant
+    namespace: default

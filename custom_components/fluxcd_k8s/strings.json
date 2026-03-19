@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Kubernetes Cluster",
+        "description": "Configure access to your Kubernetes cluster running FluxCD",
+        "data": {
+          "access_mode": "Access Mode",
+          "kubeconfig_path": "Kubeconfig Path",
+          "namespace": "Namespace",
+          "scan_interval": "Scan Interval (seconds)",
+          "label_selector": "Label Selector"
+        },
+        "data_description": {
+          "access_mode": "Select 'In-Cluster' if Home Assistant runs inside Kubernetes, or 'Kubeconfig File' for external access",
+          "kubeconfig_path": "Path to the kubeconfig file (leave empty for default location, only used with Kubeconfig mode)",
+          "namespace": "Kubernetes namespace to monitor (leave empty for all namespaces)",
+          "scan_interval": "How often to poll FluxCD resources (in seconds, minimum 10)",
+          "label_selector": "Optional Kubernetes label selector to filter resources (e.g. 'app=myapp')"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Kubernetes cluster. Please check your configuration.",
+      "invalid_kubeconfig_path": "The specified kubeconfig file does not exist.",
+      "unknown": "An unexpected error occurred. Please check the logs for more details."
+    },
+    "abort": {
+      "already_configured": "This cluster and namespace combination is already configured."
+    }
+  }
+}
