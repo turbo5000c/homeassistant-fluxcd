@@ -106,7 +106,18 @@ _make_ha_stub("kubernetes_asyncio")
 _make_ha_stub("kubernetes_asyncio.client")
 _make_ha_stub("kubernetes_asyncio.config")
 _k8s_exc = _make_ha_stub("kubernetes_asyncio.client.exceptions")
-_k8s_exc.ApiException = Exception
+
+
+class _ApiException(Exception):
+    """Minimal ApiException stub with a status code."""
+
+    def __init__(self, status=0, reason=None):
+        super().__init__(reason or str(status))
+        self.status = status
+        self.reason = reason
+
+
+_k8s_exc.ApiException = _ApiException
 
 _api_stub = _make_ha_stub("fluxcd_k8s.api")
 _api_stub.FluxKubernetesClient = object

@@ -7,6 +7,7 @@ from typing import Any
 
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client import ApiClient, CustomObjectsApi
+from kubernetes_asyncio.client.exceptions import ApiException
 
 from .const import (
     ACCESS_MODE_IN_CLUSTER,
@@ -127,6 +128,19 @@ class FluxKubernetesClient:
                     category=flux_crd["category"],
                 )
                 all_resources.extend(resources)
+            except ApiException as exc:
+                if exc.status == 404:
+                    _LOGGER.debug(
+                        "%s CRD is not available on this cluster, skipping",
+                        flux_crd["kind"],
+                        exc_info=True,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Failed to fetch %s resources, skipping",
+                        flux_crd["kind"],
+                        exc_info=True,
+                    )
             except Exception:
                 _LOGGER.warning(
                     "Failed to fetch %s resources, skipping",
