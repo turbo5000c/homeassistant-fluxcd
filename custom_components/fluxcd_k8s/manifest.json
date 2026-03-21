@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/dawg-io/homeassistant-fluxcd/issues",
   "loggers": ["kubernetes_asyncio"],
   "requirements": ["kubernetes-asyncio==35.0.1"],
-  "version": "0.1.6"
+  "version": "0.1.5"
 }
