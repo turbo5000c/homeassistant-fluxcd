@@ -133,7 +133,6 @@ class FluxKubernetesClient:
                     _LOGGER.debug(
                         "%s CRD is not available on this cluster, skipping",
                         flux_crd["kind"],
-                        exc_info=True,
                     )
                 else:
                     _LOGGER.warning(

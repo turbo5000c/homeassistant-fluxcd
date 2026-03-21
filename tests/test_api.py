@@ -90,11 +90,13 @@ class TestNotFoundHandling:
         ):
             await flux_client.async_get_all_flux_resources()
 
-        assert not any(
-            "Failed to fetch" in record.message
+        warning_records = [
+            record
             for record in caplog.records
             if record.levelno >= logging.WARNING
-        )
+            and record.name == _api_module.__name__
+        ]
+        assert not warning_records
 
     @pytest.mark.asyncio
     async def test_404_emits_debug_log(self, caplog):
@@ -110,11 +112,15 @@ class TestNotFoundHandling:
                 side_effect=ApiException(status=404),
             ),
             patch.object(flux_client, "async_get_flux_controllers", new_callable=AsyncMock, return_value=[]),
-            caplog.at_level(logging.DEBUG),
+            caplog.at_level(logging.DEBUG, logger=_api_module.__name__),
         ):
             await flux_client.async_get_all_flux_resources()
 
-        debug_messages = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+        debug_messages = [
+            r.message
+            for r in caplog.records
+            if r.levelno == logging.DEBUG and r.name == _api_module.__name__
+        ]
         assert any("not available on this cluster" in msg for msg in debug_messages)
 
     @pytest.mark.asyncio
