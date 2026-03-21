@@ -4,11 +4,11 @@ A custom Home Assistant integration that monitors **FluxCD resources in Kubernet
 
 ## Companion Lovelace Card
 
-The [**fluxcd-topology-card**](https://github.com/turbo5000c/fluxcd-topology-card) is an optional companion custom card for Home Assistant dashboards. It visualizes the relationships between FluxCD resources (GitRepositories, HelmRepositories, HelmCharts, HelmReleases, Kustomizations, and more) as an interactive topology graph directly in your Lovelace UI.
+The [**fluxcd-topology-card**](https://github.com/dawg-io/fluxcd-topology-card) is an optional companion custom card for Home Assistant dashboards. It visualizes the relationships between FluxCD resources (GitRepositories, HelmRepositories, HelmCharts, HelmReleases, Kustomizations, and more) as an interactive topology graph directly in your Lovelace UI.
 
 It is built to work alongside this integration and enhances the monitoring experience by providing a graphical overview of your FluxCD resource dependencies — but it is entirely optional and not required for this integration to function.
 
-👉 [https://github.com/turbo5000c/fluxcd-topology-card](https://github.com/turbo5000c/fluxcd-topology-card)
+👉 [https://github.com/dawg-io/fluxcd-topology-card](https://github.com/dawg-io/fluxcd-topology-card)
 
 ## Features
 
