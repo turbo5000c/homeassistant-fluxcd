@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from homeassistant.core import HomeAssistant
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client import ApiClient, CustomObjectsApi
 from kubernetes_asyncio.client.exceptions import ApiException
@@ -42,15 +43,16 @@ class FluxKubernetesClient:
 
     def __init__(
         self,
+        hass: HomeAssistant,
         access_mode: str,
         kubeconfig_path: str = "",
         namespace: str = "",
         label_selector: str = "",
-        hass: Any | None = None,
     ) -> None:
         """Initialize the FluxCD client.
 
         Args:
+            hass: Home Assistant instance used to run blocking calls in the executor.
             access_mode: Either 'in_cluster' or 'kubeconfig'.
             kubeconfig_path: Path to kubeconfig file (required if access_mode is 'kubeconfig').
             namespace: Kubernetes namespace to scope queries. Empty string means all namespaces.
@@ -72,10 +74,7 @@ class FluxKubernetesClient:
         if self._access_mode == ACCESS_MODE_IN_CLUSTER:
             # load_incluster_config() configures the global default client
             # settings from the pod's service account credentials
-            if self._hass is not None:
-                await self._hass.async_add_executor_job(config.load_incluster_config)
-            else:
-                config.load_incluster_config()
+            await self._hass.async_add_executor_job(config.load_incluster_config)
             self._api_client = ApiClient()
         else:
             self._api_client = await config.new_client_from_config(

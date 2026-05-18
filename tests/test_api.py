@@ -75,7 +75,7 @@ class TestNotFoundHandling:
     @pytest.mark.asyncio
     async def test_404_does_not_emit_warning(self, caplog):
         """A 404 ApiException should be logged at DEBUG, not WARNING."""
-        flux_client = FluxKubernetesClient(access_mode="kubeconfig")
+        flux_client = FluxKubernetesClient(hass=MagicMock(), access_mode="kubeconfig")
         flux_client._api_client = object()
 
         with (
@@ -101,7 +101,7 @@ class TestNotFoundHandling:
     @pytest.mark.asyncio
     async def test_404_emits_debug_log(self, caplog):
         """A 404 ApiException should produce a DEBUG log about the CRD being unavailable."""
-        flux_client = FluxKubernetesClient(access_mode="kubeconfig")
+        flux_client = FluxKubernetesClient(hass=MagicMock(), access_mode="kubeconfig")
         flux_client._api_client = object()
 
         with (
@@ -126,7 +126,7 @@ class TestNotFoundHandling:
     @pytest.mark.asyncio
     async def test_non_404_api_exception_emits_warning(self, caplog):
         """A non-404 ApiException (e.g. 403 Forbidden) should still log at WARNING."""
-        flux_client = FluxKubernetesClient(access_mode="kubeconfig")
+        flux_client = FluxKubernetesClient(hass=MagicMock(), access_mode="kubeconfig")
         flux_client._api_client = object()
 
         with (
@@ -150,7 +150,7 @@ class TestNotFoundHandling:
     @pytest.mark.asyncio
     async def test_generic_exception_emits_warning(self, caplog):
         """A generic (non-ApiException) error should still log at WARNING."""
-        flux_client = FluxKubernetesClient(access_mode="kubeconfig")
+        flux_client = FluxKubernetesClient(hass=MagicMock(), access_mode="kubeconfig")
         flux_client._api_client = object()
 
         with (
@@ -174,7 +174,7 @@ class TestNotFoundHandling:
     @pytest.mark.asyncio
     async def test_404_returns_empty_list_for_missing_crd(self):
         """Resources from a 404-failing CRD should simply be absent from results."""
-        flux_client = FluxKubernetesClient(access_mode="kubeconfig")
+        flux_client = FluxKubernetesClient(hass=MagicMock(), access_mode="kubeconfig")
         flux_client._api_client = object()
 
         with (

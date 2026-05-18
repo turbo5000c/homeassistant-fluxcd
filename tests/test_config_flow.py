@@ -6,7 +6,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -94,3 +94,37 @@ class TestValidateInput:
             _config_flow.os.path.isfile, "/does/not/exist"
         )
 
+    @pytest.mark.asyncio
+    async def test_kubeconfig_existing_path_uses_executor_and_passes_hass_to_client(self):
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(return_value=True)
+
+        mock_client = MagicMock()
+        mock_client.async_init = AsyncMock(return_value=None)
+        mock_client.async_test_connection = AsyncMock(return_value=True)
+        mock_client.async_close = AsyncMock(return_value=None)
+
+        data = {
+            _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
+            _const.CONF_KUBECONFIG_PATH: "/does/exist",
+        }
+
+        with patch.object(
+            _config_flow, "FluxKubernetesClient", return_value=mock_client
+        ) as mock_client_class:
+            result = await _config_flow.validate_input(hass, data)
+
+        hass.async_add_executor_job.assert_awaited_once_with(
+            _config_flow.os.path.isfile, "/does/exist"
+        )
+        mock_client_class.assert_called_once_with(
+            hass=hass,
+            access_mode=_const.ACCESS_MODE_KUBECONFIG,
+            kubeconfig_path="/does/exist",
+            namespace=_const.DEFAULT_NAMESPACE,
+            label_selector="",
+        )
+        mock_client.async_init.assert_awaited_once()
+        mock_client.async_test_connection.assert_awaited_once()
+        mock_client.async_close.assert_awaited_once()
+        assert result["title"] == "FluxCD (all namespaces)"
