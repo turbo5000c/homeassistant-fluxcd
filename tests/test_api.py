@@ -190,3 +190,24 @@ class TestNotFoundHandling:
 
         assert result == []
 
+
+class TestAsyncInit:
+    """Tests for FluxKubernetesClient.async_init."""
+
+    @pytest.mark.asyncio
+    async def test_in_cluster_init_uses_executor_for_load_incluster_config(self):
+        """load_incluster_config() must not run on the event loop."""
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(return_value=None)
+
+        load_incluster_config = MagicMock()
+        _api_module.config.load_incluster_config = load_incluster_config
+
+        flux_client = FluxKubernetesClient(
+            hass=hass, access_mode=_api_module.ACCESS_MODE_IN_CLUSTER
+        )
+
+        await flux_client.async_init()
+
+        hass.async_add_executor_job.assert_awaited_once_with(load_incluster_config)
+        load_incluster_config.assert_not_called()

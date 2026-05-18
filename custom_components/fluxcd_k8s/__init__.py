@@ -40,6 +40,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Create the Kubernetes API client
     k8s_client = FluxKubernetesClient(
+        hass=hass,
         access_mode=entry.data[CONF_ACCESS_MODE],
         kubeconfig_path=entry.data.get(CONF_KUBECONFIG_PATH, ""),
         namespace=entry.data.get(CONF_NAMESPACE, DEFAULT_NAMESPACE),

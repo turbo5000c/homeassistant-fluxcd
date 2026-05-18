@@ -46,6 +46,7 @@ class FluxKubernetesClient:
         kubeconfig_path: str = "",
         namespace: str = "",
         label_selector: str = "",
+        hass: Any | None = None,
     ) -> None:
         """Initialize the FluxCD client.
 
@@ -55,6 +56,7 @@ class FluxKubernetesClient:
             namespace: Kubernetes namespace to scope queries. Empty string means all namespaces.
             label_selector: Optional Kubernetes label selector to filter resources.
         """
+        self._hass = hass
         self._access_mode = access_mode
         self._kubeconfig_path = kubeconfig_path
         self._namespace = namespace
@@ -70,7 +72,10 @@ class FluxKubernetesClient:
         if self._access_mode == ACCESS_MODE_IN_CLUSTER:
             # load_incluster_config() configures the global default client
             # settings from the pod's service account credentials
-            config.load_incluster_config()
+            if self._hass is not None:
+                await self._hass.async_add_executor_job(config.load_incluster_config)
+            else:
+                config.load_incluster_config()
             self._api_client = ApiClient()
         else:
             self._api_client = await config.new_client_from_config(

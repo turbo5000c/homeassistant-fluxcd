@@ -60,10 +60,12 @@ async def validate_input(
 
     # Validate kubeconfig path if specified
     if access_mode == ACCESS_MODE_KUBECONFIG and kubeconfig_path:
-        if not os.path.isfile(kubeconfig_path):
+        exists = await hass.async_add_executor_job(os.path.isfile, kubeconfig_path)
+        if not exists:
             raise InvalidKubeconfigPath
 
     k8s_client = FluxKubernetesClient(
+        hass=hass,
         access_mode=access_mode,
         kubeconfig_path=kubeconfig_path,
         namespace=data.get(CONF_NAMESPACE, DEFAULT_NAMESPACE),
