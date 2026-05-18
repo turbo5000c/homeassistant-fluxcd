@@ -43,20 +43,21 @@ class FluxKubernetesClient:
 
     def __init__(
         self,
-        hass: HomeAssistant,
         access_mode: str,
         kubeconfig_path: str = "",
         namespace: str = "",
         label_selector: str = "",
+        *,
+        hass: HomeAssistant,
     ) -> None:
         """Initialize the FluxCD client.
 
         Args:
-            hass: Home Assistant instance used to run blocking calls in the executor.
             access_mode: Either 'in_cluster' or 'kubeconfig'.
             kubeconfig_path: Path to kubeconfig file (required if access_mode is 'kubeconfig').
             namespace: Kubernetes namespace to scope queries. Empty string means all namespaces.
             label_selector: Optional Kubernetes label selector to filter resources.
+            hass: Home Assistant instance used to run blocking calls in the executor.
         """
         self._hass = hass
         self._access_mode = access_mode

@@ -79,7 +79,7 @@ _const = sys.modules["fluxcd_k8s.const"]
 class TestValidateInput:
     @pytest.mark.asyncio
     async def test_kubeconfig_path_check_runs_in_executor(self):
-        hass = MagicMock()
+        hass = AsyncMock()
         hass.async_add_executor_job = AsyncMock(return_value=False)
 
         data = {
@@ -95,8 +95,8 @@ class TestValidateInput:
         )
 
     @pytest.mark.asyncio
-    async def test_kubeconfig_existing_path_uses_executor_and_passes_hass_to_client(self):
-        hass = MagicMock()
+    async def test_kubeconfig_valid_path_passes_hass_to_client(self):
+        hass = AsyncMock()
         hass.async_add_executor_job = AsyncMock(return_value=True)
 
         mock_client = MagicMock()
