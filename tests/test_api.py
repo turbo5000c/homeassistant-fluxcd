@@ -32,6 +32,8 @@ def _ensure_k8s_client_attrs():
         k8s_client.CustomObjectsApi = object
     if not hasattr(k8s_client, "VersionApi"):
         k8s_client.VersionApi = object
+    if not hasattr(k8s_client, "Configuration"):
+        k8s_client.Configuration = object
 
     k8s = sys.modules["kubernetes_asyncio"]
     if not hasattr(k8s, "client"):
@@ -206,11 +208,15 @@ class TestAsyncInit:
         flux_client = FluxKubernetesClient(
             hass=hass, access_mode=_api_module.ACCESS_MODE_IN_CLUSTER
         )
+        created_api_client = object()
+        flux_client._async_create_api_client = AsyncMock(return_value=created_api_client)
 
         await flux_client.async_init()
 
         hass.async_add_executor_job.assert_awaited_once_with(load_incluster_config)
         load_incluster_config.assert_not_called()
+        flux_client._async_create_api_client.assert_awaited_once_with()
+        assert flux_client._api_client is created_api_client
 
     @pytest.mark.asyncio
     async def test_init_requires_hass(self):
@@ -232,7 +238,7 @@ class TestAsyncInit:
         merger = MagicMock(config=kubeconfig_node)
         api_client = object()
         kube_config_module = MagicMock(KubeConfigMerger=MagicMock(return_value=merger))
-        new_client_from_config_dict = AsyncMock(return_value=api_client)
+        load_kube_config_from_dict = AsyncMock()
 
         with (
             patch.object(
@@ -246,8 +252,8 @@ class TestAsyncInit:
             ),
             patch.object(
                 _api_module.config,
-                "new_client_from_config_dict",
-                new_client_from_config_dict,
+                "load_kube_config_from_dict",
+                load_kube_config_from_dict,
                 create=True,
             ),
         ):
@@ -256,6 +262,7 @@ class TestAsyncInit:
                 access_mode="kubeconfig",
                 kubeconfig_path="/config/.kube/config",
             )
+            flux_client._async_create_api_client = AsyncMock(return_value=api_client)
 
             await flux_client.async_init()
 
@@ -265,7 +272,34 @@ class TestAsyncInit:
             kube_config_module.KubeConfigMerger.assert_called_once_with(
                 "/config/.kube/config"
             )
-            new_client_from_config_dict.assert_awaited_once_with(
-                config_dict=kubeconfig_node
+            load_kube_config_from_dict.assert_awaited_once()
+            called_kwargs = load_kube_config_from_dict.await_args.kwargs
+            assert called_kwargs["config_dict"] is kubeconfig_node
+            flux_client._async_create_api_client.assert_awaited_once_with(
+                called_kwargs["client_configuration"]
             )
             assert flux_client._api_client is api_client
+
+    @pytest.mark.asyncio
+    async def test_async_create_api_client_offloads_ssl_context_creation(self):
+        """SSL context creation (incl. cert loading) must run in executor."""
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
+        flux_client = FluxKubernetesClient(hass=hass, access_mode="kubeconfig")
+
+        client_configuration = MagicMock()
+        client_configuration.ssl_ca_cert = "/ca.crt"
+        client_configuration.cert_file = "/tls.crt"
+        client_configuration.key_file = "/tls.key"
+
+        with patch.object(_api_module, "ApiClient", return_value=object()):
+            await flux_client._async_create_api_client(client_configuration)
+
+        hass.async_add_executor_job.assert_awaited_once_with(
+            flux_client._create_ssl_context,
+            "/ca.crt",
+            "/tls.crt",
+            "/tls.key",
+        )
+        assert client_configuration.cert_file == "/tls.crt"
+        assert client_configuration.key_file == "/tls.key"

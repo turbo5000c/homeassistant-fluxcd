@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import ssl
 from typing import Any
+from unittest.mock import patch
 
 from homeassistant.core import HomeAssistant
 from kubernetes_asyncio import client, config
@@ -79,20 +81,56 @@ class FluxKubernetesClient:
             # load_incluster_config() configures the global default client
             # settings from the pod's service account credentials
             await self._hass.async_add_executor_job(config.load_incluster_config)
-            self._api_client = ApiClient()
+            self._api_client = await self._async_create_api_client()
         else:
             kubeconfig = await self._hass.async_add_executor_job(
                 self._load_kubeconfig, self._kubeconfig_path or None
             )
-            self._api_client = await config.new_client_from_config_dict(
-                config_dict=kubeconfig
+            client_configuration = client.Configuration()
+            await config.load_kube_config_from_dict(
+                config_dict=kubeconfig,
+                client_configuration=client_configuration,
             )
+            self._api_client = await self._async_create_api_client(client_configuration)
 
     @staticmethod
     def _load_kubeconfig(config_file: str | None) -> object:
         """Load kubeconfig contents while keeping blocking file I/O off the event loop."""
         kubeconfig_path = config_file or config.KUBE_CONFIG_DEFAULT_LOCATION
         return config.kube_config.KubeConfigMerger(kubeconfig_path).config
+
+    @staticmethod
+    def _create_ssl_context(
+        ca_cert: str | None, cert_file: str | None, key_file: str | None
+    ) -> ssl.SSLContext:
+        """Create an SSL context, including optional client cert loading."""
+        ssl_context = ssl.create_default_context(cafile=ca_cert)
+        if cert_file:
+            ssl_context.load_cert_chain(cert_file, keyfile=key_file)
+        return ssl_context
+
+    async def _async_create_api_client(
+        self, client_configuration: client.Configuration | None = None
+    ) -> ApiClient:
+        """Create ApiClient while keeping certificate file reads off the event loop."""
+        configuration = client_configuration or client.Configuration.get_default_copy()
+        ssl_context = await self._hass.async_add_executor_job(
+            self._create_ssl_context,
+            configuration.ssl_ca_cert,
+            configuration.cert_file,
+            configuration.key_file,
+        )
+
+        cert_file = configuration.cert_file
+        key_file = configuration.key_file
+        configuration.cert_file = None
+        configuration.key_file = None
+        try:
+            with patch("ssl.create_default_context", return_value=ssl_context):
+                return ApiClient(configuration=configuration)
+        finally:
+            configuration.cert_file = cert_file
+            configuration.key_file = key_file
 
     async def async_close(self) -> None:
         """Close the Kubernetes API client connection."""
