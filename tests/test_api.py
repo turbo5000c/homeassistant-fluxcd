@@ -283,17 +283,31 @@ class TestAsyncInit:
     @pytest.mark.asyncio
     async def test_async_create_api_client_offloads_ssl_context_creation(self):
         """SSL context creation (incl. cert loading) must run in executor."""
+        ssl_context = MagicMock()
         hass = MagicMock()
-        hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
+        hass.async_add_executor_job = AsyncMock(return_value=ssl_context)
         flux_client = FluxKubernetesClient(hass=hass, access_mode="kubeconfig")
 
         client_configuration = MagicMock()
         client_configuration.ssl_ca_cert = "/ca.crt"
         client_configuration.cert_file = "/tls.crt"
         client_configuration.key_file = "/tls.key"
+        client_configuration.connection_pool_maxsize = 8
+        client_configuration.tls_server_name = None
+        client_configuration.proxy = None
+        client_configuration.proxy_headers = None
+        client_configuration.client_side_validation = True
 
-        with patch.object(_api_module, "ApiClient", return_value=object()):
-            await flux_client._async_create_api_client(client_configuration)
+        captured = {}
+
+        def _build_api_client(configuration, context):
+            captured["cert_file_during_build"] = configuration.cert_file
+            captured["key_file_during_build"] = configuration.key_file
+            captured["context_during_build"] = context
+            return object()
+
+        flux_client._build_api_client_with_ssl_context = MagicMock(side_effect=_build_api_client)
+        await flux_client._async_create_api_client(client_configuration)
 
         hass.async_add_executor_job.assert_awaited_once_with(
             flux_client._create_ssl_context,
@@ -301,5 +315,8 @@ class TestAsyncInit:
             "/tls.crt",
             "/tls.key",
         )
+        assert captured["cert_file_during_build"] is None
+        assert captured["key_file_during_build"] is None
+        assert captured["context_during_build"] is ssl_context
         assert client_configuration.cert_file == "/tls.crt"
         assert client_configuration.key_file == "/tls.key"

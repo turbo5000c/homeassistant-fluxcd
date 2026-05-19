@@ -125,14 +125,44 @@ class FluxKubernetesClient:
         # Prevent RESTClientObject from re-reading cert/key files on the event loop.
         configuration.cert_file = None
         configuration.key_file = None
-        original_create_default_context = ssl.create_default_context
         try:
-            ssl.create_default_context = lambda *args, **kwargs: ssl_context
-            return ApiClient(configuration=configuration)
+            return self._build_api_client_with_ssl_context(configuration, ssl_context)
         finally:
-            ssl.create_default_context = original_create_default_context
             configuration.cert_file = cert_file
             configuration.key_file = key_file
+
+    @staticmethod
+    def _build_api_client_with_ssl_context(
+        configuration: client.Configuration, ssl_context: ssl.SSLContext
+    ) -> ApiClient:
+        """Build ApiClient using a preloaded SSL context (no sync cert file reads)."""
+        import aiohttp
+        from kubernetes_asyncio.client import rest
+
+        connector = aiohttp.TCPConnector(
+            limit=configuration.connection_pool_maxsize,
+            ssl=ssl_context,
+        )
+
+        rest_client = rest.RESTClientObject.__new__(rest.RESTClientObject)
+        rest_client.server_hostname = configuration.tls_server_name
+        rest_client.proxy = configuration.proxy
+        rest_client.proxy_headers = configuration.proxy_headers
+        rest_client.pool_manager = aiohttp.ClientSession(
+            connector=connector,
+            trust_env=True,
+            read_bufsize=2**21,
+        )
+
+        api_client = ApiClient.__new__(ApiClient)
+        api_client.configuration = configuration
+        api_client.pool_threads = 1
+        api_client.rest_client = rest_client
+        api_client.default_headers = {}
+        api_client.cookie = None
+        api_client.user_agent = "OpenAPI-Generator/33.3.0+snapshot/python"
+        api_client.client_side_validation = configuration.client_side_validation
+        return api_client
 
     async def async_close(self) -> None:
         """Close the Kubernetes API client connection."""
