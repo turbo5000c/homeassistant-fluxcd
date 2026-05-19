@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import ssl
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -34,6 +35,7 @@ from .const import (
 from .models import FluxResource, parse_controller_deployment, parse_flux_resource
 
 _LOGGER = logging.getLogger(__name__)
+K8S_CLIENT_READ_BUFSIZE = 2**21
 
 
 class FluxKubernetesClient:
@@ -135,7 +137,11 @@ class FluxKubernetesClient:
     def _build_api_client_with_ssl_context(
         configuration: client.Configuration, ssl_context: ssl.SSLContext
     ) -> ApiClient:
-        """Build ApiClient using a preloaded SSL context (no sync cert file reads)."""
+        """Build ApiClient using a preloaded SSL context (no sync cert file reads).
+
+        ApiClient.__init__ constructs RESTClientObject, which synchronously loads cert
+        files into an SSL context. We avoid that path here so file reads stay off-loop.
+        """
         import aiohttp
         from kubernetes_asyncio.client import rest
 
@@ -151,18 +157,28 @@ class FluxKubernetesClient:
         rest_client.pool_manager = aiohttp.ClientSession(
             connector=connector,
             trust_env=True,
-            read_bufsize=2**21,
+            read_bufsize=K8S_CLIENT_READ_BUFSIZE,
         )
 
+        # We intentionally bypass ApiClient.__init__ because it would rebuild SSL context
+        # and re-read cert files on the event loop.
         api_client = ApiClient.__new__(ApiClient)
         api_client.configuration = configuration
         api_client.pool_threads = 1
         api_client.rest_client = rest_client
         api_client.default_headers = {}
         api_client.cookie = None
-        api_client.user_agent = "OpenAPI-Generator/33.3.0+snapshot/python"
+        api_client.user_agent = FluxKubernetesClient._default_user_agent()
         api_client.client_side_validation = configuration.client_side_validation
         return api_client
+
+    @staticmethod
+    def _default_user_agent() -> str:
+        """Return a user agent aligned with installed kubernetes-asyncio version."""
+        try:
+            return f"OpenAPI-Generator/{version('kubernetes-asyncio')}/python"
+        except PackageNotFoundError:
+            return "OpenAPI-Generator/python"
 
     async def async_close(self) -> None:
         """Close the Kubernetes API client connection."""
