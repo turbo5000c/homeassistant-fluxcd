@@ -283,9 +283,10 @@ class TestAsyncInit:
     @pytest.mark.asyncio
     async def test_async_create_api_client_offloads_ssl_context_creation(self):
         """SSL context creation (incl. cert loading) must run in executor."""
+        FluxKubernetesClient._cached_user_agent = None
         ssl_context = MagicMock()
         hass = MagicMock()
-        hass.async_add_executor_job = AsyncMock(return_value=ssl_context)
+        hass.async_add_executor_job = AsyncMock(side_effect=[ssl_context, "35.0.1"])
         flux_client = FluxKubernetesClient(hass=hass, access_mode="kubeconfig")
 
         client_configuration = MagicMock()
@@ -300,23 +301,28 @@ class TestAsyncInit:
 
         captured = {}
 
-        def _build_api_client(configuration, context):
+        def _build_api_client(configuration, context, user_agent):
             captured["cert_file_during_build"] = configuration.cert_file
             captured["key_file_during_build"] = configuration.key_file
             captured["context_during_build"] = context
+            captured["user_agent_during_build"] = user_agent
             return object()
 
         flux_client._build_api_client_with_ssl_context = MagicMock(side_effect=_build_api_client)
         await flux_client._async_create_api_client(client_configuration)
 
-        hass.async_add_executor_job.assert_awaited_once_with(
+        hass.async_add_executor_job.assert_any_await(
             flux_client._create_ssl_context,
             "/ca.crt",
             "/tls.crt",
             "/tls.key",
         )
+        hass.async_add_executor_job.assert_any_await(
+            flux_client._get_kubernetes_asyncio_version
+        )
         assert captured["cert_file_during_build"] is None
         assert captured["key_file_during_build"] is None
         assert captured["context_during_build"] is ssl_context
+        assert captured["user_agent_during_build"] == "OpenAPI-Generator/35.0.1/python"
         assert client_configuration.cert_file == "/tls.crt"
         assert client_configuration.key_file == "/tls.key"

@@ -46,6 +46,8 @@ class FluxKubernetesClient:
     Supports both in-cluster and kubeconfig-based authentication.
     """
 
+    _cached_user_agent: str | None = None
+
     def __init__(
         self,
         access_mode: str,
@@ -123,6 +125,14 @@ class FluxKubernetesClient:
             configuration.cert_file,
             configuration.key_file,
         )
+        if self.__class__._cached_user_agent is None:
+            kubernetes_asyncio_version = await self._hass.async_add_executor_job(
+                self._get_kubernetes_asyncio_version
+            )
+            self.__class__._cached_user_agent = self._default_user_agent(
+                kubernetes_asyncio_version
+            )
+        user_agent = self.__class__._cached_user_agent
 
         cert_file = configuration.cert_file
         key_file = configuration.key_file
@@ -130,14 +140,18 @@ class FluxKubernetesClient:
         configuration.cert_file = None
         configuration.key_file = None
         try:
-            return self._build_api_client_with_ssl_context(configuration, ssl_context)
+            return self._build_api_client_with_ssl_context(
+                configuration, ssl_context, user_agent
+            )
         finally:
             configuration.cert_file = cert_file
             configuration.key_file = key_file
 
     @staticmethod
     def _build_api_client_with_ssl_context(
-        configuration: client.Configuration, ssl_context: ssl.SSLContext
+        configuration: client.Configuration,
+        ssl_context: ssl.SSLContext,
+        user_agent: str | None = None,
     ) -> ApiClient:
         """Build ApiClient using a preloaded SSL context (no sync cert file reads).
 
@@ -170,17 +184,24 @@ class FluxKubernetesClient:
         api_client.rest_client = rest_client
         api_client.default_headers = {}
         api_client.cookie = None
-        api_client.user_agent = FluxKubernetesClient._default_user_agent()
+        api_client.user_agent = user_agent or FluxKubernetesClient._default_user_agent()
         api_client.client_side_validation = configuration.client_side_validation
         return api_client
 
     @staticmethod
-    def _default_user_agent() -> str:
-        """Return a user agent aligned with installed kubernetes-asyncio version."""
+    def _get_kubernetes_asyncio_version() -> str | None:
+        """Return the installed kubernetes-asyncio version (may perform disk I/O)."""
         try:
-            return f"OpenAPI-Generator/{version('kubernetes-asyncio')}/python"
+            return version("kubernetes-asyncio")
         except PackageNotFoundError:
-            return "OpenAPI-Generator/python"
+            return None
+
+    @staticmethod
+    def _default_user_agent(kubernetes_asyncio_version: str | None = None) -> str:
+        """Return a user agent aligned with installed kubernetes-asyncio version."""
+        if kubernetes_asyncio_version:
+            return f"OpenAPI-Generator/{kubernetes_asyncio_version}/python"
+        return "OpenAPI-Generator/python"
 
     async def async_close(self) -> None:
         """Close the Kubernetes API client connection."""
