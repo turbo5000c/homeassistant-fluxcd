@@ -89,7 +89,7 @@ class FluxKubernetesClient:
             )
 
     @staticmethod
-    def _load_kubeconfig(config_file: str | None) -> Any:
+    def _load_kubeconfig(config_file: str | None) -> object:
         """Load kubeconfig contents while keeping blocking file I/O off the event loop."""
         kubeconfig_path = config_file or config.KUBE_CONFIG_DEFAULT_LOCATION
         return config.kube_config.KubeConfigMerger(kubeconfig_path).config

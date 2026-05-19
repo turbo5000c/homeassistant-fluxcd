@@ -230,28 +230,42 @@ class TestAsyncInit:
 
         kubeconfig_node = object()
         merger = MagicMock(config=kubeconfig_node)
-        _api_module.config.kube_config = MagicMock(
-            KubeConfigMerger=MagicMock(return_value=merger)
-        )
-        _api_module.config.KUBE_CONFIG_DEFAULT_LOCATION = "/default/.kube/config"
         api_client = object()
-        _api_module.config.new_client_from_config_dict = AsyncMock(return_value=api_client)
+        kube_config_module = MagicMock(KubeConfigMerger=MagicMock(return_value=merger))
+        new_client_from_config_dict = AsyncMock(return_value=api_client)
 
-        flux_client = FluxKubernetesClient(
-            hass=hass,
-            access_mode="kubeconfig",
-            kubeconfig_path="/config/.kube/config",
-        )
+        with (
+            patch.object(
+                _api_module.config, "kube_config", kube_config_module, create=True
+            ),
+            patch.object(
+                _api_module.config,
+                "KUBE_CONFIG_DEFAULT_LOCATION",
+                "/default/.kube/config",
+                create=True,
+            ),
+            patch.object(
+                _api_module.config,
+                "new_client_from_config_dict",
+                new_client_from_config_dict,
+                create=True,
+            ),
+        ):
+            flux_client = FluxKubernetesClient(
+                hass=hass,
+                access_mode="kubeconfig",
+                kubeconfig_path="/config/.kube/config",
+            )
 
-        await flux_client.async_init()
+            await flux_client.async_init()
 
-        hass.async_add_executor_job.assert_awaited_once_with(
-            flux_client._load_kubeconfig, "/config/.kube/config"
-        )
-        _api_module.config.kube_config.KubeConfigMerger.assert_called_once_with(
-            "/config/.kube/config"
-        )
-        _api_module.config.new_client_from_config_dict.assert_awaited_once_with(
-            config_dict=kubeconfig_node
-        )
-        assert flux_client._api_client is api_client
+            hass.async_add_executor_job.assert_awaited_once_with(
+                flux_client._load_kubeconfig, "/config/.kube/config"
+            )
+            kube_config_module.KubeConfigMerger.assert_called_once_with(
+                "/config/.kube/config"
+            )
+            new_client_from_config_dict.assert_awaited_once_with(
+                config_dict=kubeconfig_node
+            )
+            assert flux_client._api_client is api_client
