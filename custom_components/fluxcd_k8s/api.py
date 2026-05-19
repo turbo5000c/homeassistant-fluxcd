@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import ssl
 from typing import Any
-from unittest.mock import patch
 
 from homeassistant.core import HomeAssistant
 from kubernetes_asyncio import client, config
@@ -123,12 +122,15 @@ class FluxKubernetesClient:
 
         cert_file = configuration.cert_file
         key_file = configuration.key_file
+        # Prevent RESTClientObject from re-reading cert/key files on the event loop.
         configuration.cert_file = None
         configuration.key_file = None
+        original_create_default_context = ssl.create_default_context
         try:
-            with patch("ssl.create_default_context", return_value=ssl_context):
-                return ApiClient(configuration=configuration)
+            ssl.create_default_context = lambda *args, **kwargs: ssl_context
+            return ApiClient(configuration=configuration)
         finally:
+            ssl.create_default_context = original_create_default_context
             configuration.cert_file = cert_file
             configuration.key_file = key_file
 
