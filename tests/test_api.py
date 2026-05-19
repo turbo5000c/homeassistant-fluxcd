@@ -217,3 +217,41 @@ class TestAsyncInit:
         """hass must be provided to guarantee non-blocking in-cluster config loading."""
         with pytest.raises(ValueError, match="hass is required"):
             FluxKubernetesClient(hass=None, access_mode=_api_module.ACCESS_MODE_IN_CLUSTER)
+
+    @pytest.mark.asyncio
+    async def test_kubeconfig_init_loads_kubeconfig_in_executor(self):
+        """Kubeconfig file reads must happen in the executor to avoid loop blocking."""
+        hass = MagicMock()
+
+        async def _run_in_executor(func, *args):
+            return func(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=_run_in_executor)
+
+        kubeconfig_node = object()
+        merger = MagicMock(config=kubeconfig_node)
+        _api_module.config.kube_config = MagicMock(
+            KubeConfigMerger=MagicMock(return_value=merger)
+        )
+        _api_module.config.KUBE_CONFIG_DEFAULT_LOCATION = "/default/.kube/config"
+        api_client = object()
+        _api_module.config.new_client_from_config_dict = AsyncMock(return_value=api_client)
+
+        flux_client = FluxKubernetesClient(
+            hass=hass,
+            access_mode="kubeconfig",
+            kubeconfig_path="/config/.kube/config",
+        )
+
+        await flux_client.async_init()
+
+        hass.async_add_executor_job.assert_awaited_once_with(
+            flux_client._load_kubeconfig, "/config/.kube/config"
+        )
+        _api_module.config.kube_config.KubeConfigMerger.assert_called_once_with(
+            "/config/.kube/config"
+        )
+        _api_module.config.new_client_from_config_dict.assert_awaited_once_with(
+            config_dict=kubeconfig_node
+        )
+        assert flux_client._api_client is api_client

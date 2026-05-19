@@ -81,9 +81,18 @@ class FluxKubernetesClient:
             await self._hass.async_add_executor_job(config.load_incluster_config)
             self._api_client = ApiClient()
         else:
-            self._api_client = await config.new_client_from_config(
-                config_file=self._kubeconfig_path or None
+            kubeconfig = await self._hass.async_add_executor_job(
+                self._load_kubeconfig, self._kubeconfig_path or None
             )
+            self._api_client = await config.new_client_from_config_dict(
+                config_dict=kubeconfig
+            )
+
+    @staticmethod
+    def _load_kubeconfig(config_file: str | None) -> Any:
+        """Load kubeconfig contents while keeping blocking file I/O off the event loop."""
+        kubeconfig_path = config_file or config.KUBE_CONFIG_DEFAULT_LOCATION
+        return config.kube_config.KubeConfigMerger(kubeconfig_path).config
 
     async def async_close(self) -> None:
         """Close the Kubernetes API client connection."""
