@@ -35,7 +35,9 @@ from .const import (
 from .models import FluxResource, parse_controller_deployment, parse_flux_resource
 
 _LOGGER = logging.getLogger(__name__)
-K8S_CLIENT_READ_BUFSIZE = 2**21
+# Match upstream kubernetes_asyncio REST client default (2 MiB) so large watch/list
+# responses still fit without reducing behavior or increasing memory use beyond default.
+KUBERNETES_CLIENT_READ_BUFFER_SIZE = 2**21
 
 
 class FluxKubernetesClient:
@@ -157,7 +159,7 @@ class FluxKubernetesClient:
         rest_client.pool_manager = aiohttp.ClientSession(
             connector=connector,
             trust_env=True,
-            read_bufsize=K8S_CLIENT_READ_BUFSIZE,
+            read_bufsize=KUBERNETES_CLIENT_READ_BUFFER_SIZE,
         )
 
         # We intentionally bypass ApiClient.__init__ because it would rebuild SSL context
