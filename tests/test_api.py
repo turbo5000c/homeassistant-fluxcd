@@ -213,17 +213,7 @@ class TestAsyncInit:
         load_incluster_config.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_in_cluster_init_without_hass_calls_load_incluster_config_directly(
-        self,
-    ):
-        """When hass is unavailable, load_incluster_config() should still run."""
-        load_incluster_config = MagicMock()
-        _api_module.config.load_incluster_config = load_incluster_config
-
-        flux_client = FluxKubernetesClient(
-            hass=None, access_mode=_api_module.ACCESS_MODE_IN_CLUSTER
-        )
-
-        await flux_client.async_init()
-
-        load_incluster_config.assert_called_once_with()
+    async def test_init_requires_hass(self):
+        """hass must be provided to guarantee non-blocking in-cluster config loading."""
+        with pytest.raises(ValueError, match="hass is required"):
+            FluxKubernetesClient(hass=None, access_mode=_api_module.ACCESS_MODE_IN_CLUSTER)

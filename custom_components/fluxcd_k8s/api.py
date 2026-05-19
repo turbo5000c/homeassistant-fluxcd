@@ -59,6 +59,9 @@ class FluxKubernetesClient:
             label_selector: Optional Kubernetes label selector to filter resources.
             hass: Home Assistant instance used to run blocking calls in the executor.
         """
+        if hass is None:
+            raise ValueError("hass is required")
+
         self._hass = hass
         self._access_mode = access_mode
         self._kubeconfig_path = kubeconfig_path
