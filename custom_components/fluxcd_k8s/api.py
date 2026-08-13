@@ -32,6 +32,7 @@ from .const import (
     FLUX_RESOURCESETINPUTPROVIDER,
     FLUX_SOURCES,
 )
+from .kubeconfig import KubeconfigNotFound, get_search_dirs, require_kubeconfig_path
 from .models import FluxResource, parse_controller_deployment, parse_flux_resource
 
 _LOGGER = logging.getLogger(__name__)
@@ -89,7 +90,9 @@ class FluxKubernetesClient:
             self._api_client = await self._async_create_api_client()
         else:
             kubeconfig = await self._hass.async_add_executor_job(
-                self._load_kubeconfig, self._kubeconfig_path or None
+                self._load_kubeconfig,
+                self._kubeconfig_path or None,
+                self._kubeconfig_search_dirs(),
             )
             client_configuration = client.Configuration()
             await config.load_kube_config_from_dict(
@@ -98,11 +101,33 @@ class FluxKubernetesClient:
             )
             self._api_client = await self._async_create_api_client(client_configuration)
 
+    def _kubeconfig_search_dirs(self) -> list[str]:
+        """Return the directories to search when no kubeconfig path is set.
+
+        The Home Assistant config directory is included so a kubeconfig stored
+        next to configuration.yaml (e.g. /config/kubeconfig) is picked up.
+        """
+        config_dir = getattr(self._hass.config, "config_dir", None)
+        return get_search_dirs(config_dir if isinstance(config_dir, str) else None)
+
     @staticmethod
-    def _load_kubeconfig(config_file: str | None) -> object:
-        """Load kubeconfig contents while keeping blocking file I/O off the event loop."""
-        kubeconfig_path = config_file or config.KUBE_CONFIG_DEFAULT_LOCATION
-        return config.kube_config.KubeConfigMerger(kubeconfig_path).config
+    def _load_kubeconfig(
+        config_file: str | None, search_dirs: list[str] | None = None
+    ) -> object:
+        """Load kubeconfig contents while keeping blocking file I/O off the event loop.
+
+        Resolves ``~``/environment variables in the configured path and falls
+        back to the well-known kubeconfig locations when no path is set.
+        """
+        kubeconfig_path = require_kubeconfig_path(config_file, search_dirs)
+        _LOGGER.debug("Loading kubeconfig from %s", kubeconfig_path)
+        merged = config.kube_config.KubeConfigMerger(kubeconfig_path).config
+        if merged is None:
+            raise KubeconfigNotFound(
+                f"The kubeconfig file at '{kubeconfig_path}' is empty or could not "
+                "be parsed as YAML."
+            )
+        return merged
 
     @staticmethod
     def _create_ssl_context(

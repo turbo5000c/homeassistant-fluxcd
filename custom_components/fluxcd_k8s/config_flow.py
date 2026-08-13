@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import voluptuous as vol
@@ -26,6 +25,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
+from .kubeconfig import get_search_dirs, resolve_kubeconfig_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,11 +58,19 @@ async def validate_input(
     access_mode = data[CONF_ACCESS_MODE]
     kubeconfig_path = data.get(CONF_KUBECONFIG_PATH, "")
 
-    # Validate kubeconfig path if specified
-    if access_mode == ACCESS_MODE_KUBECONFIG and kubeconfig_path:
-        exists = await hass.async_add_executor_job(os.path.isfile, kubeconfig_path)
-        if not exists:
+    # Resolve the kubeconfig location before attempting to connect. The path may
+    # use ~ or environment variables, point at a directory, or be left empty —
+    # in which case the well-known locations are searched.
+    if access_mode == ACCESS_MODE_KUBECONFIG:
+        config_dir = getattr(hass.config, "config_dir", None)
+        resolved_path = await hass.async_add_executor_job(
+            resolve_kubeconfig_path,
+            kubeconfig_path,
+            get_search_dirs(config_dir if isinstance(config_dir, str) else None),
+        )
+        if not resolved_path:
             raise InvalidKubeconfigPath
+        _LOGGER.debug("Resolved kubeconfig path to %s", resolved_path)
 
     k8s_client = FluxKubernetesClient(
         hass=hass,

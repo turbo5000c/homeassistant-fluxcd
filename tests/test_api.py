@@ -65,6 +65,9 @@ def _load_api_module():
 _api_module = _load_api_module()
 FluxKubernetesClient = _api_module.FluxKubernetesClient
 
+# Imported by api.py via a relative import, so it is already in sys.modules.
+KubeconfigNotFound = sys.modules["fluxcd_k8s.kubeconfig"].KubeconfigNotFound
+
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -225,9 +228,14 @@ class TestAsyncInit:
             FluxKubernetesClient(hass=None, access_mode=_api_module.ACCESS_MODE_IN_CLUSTER)
 
     @pytest.mark.asyncio
-    async def test_kubeconfig_init_loads_kubeconfig_in_executor(self):
+    async def test_kubeconfig_init_loads_kubeconfig_in_executor(self, tmp_path):
         """Kubeconfig file reads must happen in the executor to avoid loop blocking."""
+        kubeconfig_file = tmp_path / ".kube" / "config"
+        kubeconfig_file.parent.mkdir()
+        kubeconfig_file.write_text("apiVersion: v1\n")
+
         hass = MagicMock()
+        hass.config.config_dir = str(tmp_path)
 
         async def _run_in_executor(func, *args):
             return func(*args)
@@ -246,12 +254,6 @@ class TestAsyncInit:
             ),
             patch.object(
                 _api_module.config,
-                "KUBE_CONFIG_DEFAULT_LOCATION",
-                "/default/.kube/config",
-                create=True,
-            ),
-            patch.object(
-                _api_module.config,
                 "load_kube_config_from_dict",
                 load_kube_config_from_dict,
                 create=True,
@@ -260,17 +262,19 @@ class TestAsyncInit:
             flux_client = FluxKubernetesClient(
                 hass=hass,
                 access_mode="kubeconfig",
-                kubeconfig_path="/config/.kube/config",
+                kubeconfig_path=str(kubeconfig_file),
             )
             flux_client._async_create_api_client = AsyncMock(return_value=api_client)
 
             await flux_client.async_init()
 
             hass.async_add_executor_job.assert_awaited_once_with(
-                flux_client._load_kubeconfig, "/config/.kube/config"
+                flux_client._load_kubeconfig,
+                str(kubeconfig_file),
+                _api_module.get_search_dirs(str(tmp_path)),
             )
             kube_config_module.KubeConfigMerger.assert_called_once_with(
-                "/config/.kube/config"
+                str(kubeconfig_file)
             )
             load_kube_config_from_dict.assert_awaited_once()
             called_kwargs = load_kube_config_from_dict.await_args.kwargs
@@ -279,6 +283,74 @@ class TestAsyncInit:
                 called_kwargs["client_configuration"]
             )
             assert flux_client._api_client is api_client
+
+    @pytest.mark.asyncio
+    async def test_kubeconfig_init_expands_home_shortcut(self, tmp_path, monkeypatch):
+        """A '~/.kube/config' path must be expanded before the file is read."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        kubeconfig_file = tmp_path / ".kube" / "config"
+        kubeconfig_file.parent.mkdir()
+        kubeconfig_file.write_text("apiVersion: v1\n")
+
+        hass = MagicMock()
+        hass.config.config_dir = str(tmp_path)
+
+        async def _run_in_executor(func, *args):
+            return func(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=_run_in_executor)
+
+        merger = MagicMock(config={"apiVersion": "v1"})
+        kube_config_module = MagicMock(KubeConfigMerger=MagicMock(return_value=merger))
+
+        with (
+            patch.object(
+                _api_module.config, "kube_config", kube_config_module, create=True
+            ),
+            patch.object(
+                _api_module.config,
+                "load_kube_config_from_dict",
+                AsyncMock(),
+                create=True,
+            ),
+        ):
+            flux_client = FluxKubernetesClient(
+                hass=hass,
+                access_mode="kubeconfig",
+                kubeconfig_path="~/.kube/config",
+            )
+            flux_client._async_create_api_client = AsyncMock(return_value=object())
+
+            await flux_client.async_init()
+
+        kube_config_module.KubeConfigMerger.assert_called_once_with(
+            str(kubeconfig_file)
+        )
+
+    @pytest.mark.asyncio
+    async def test_kubeconfig_init_raises_when_no_kubeconfig_found(
+        self, tmp_path, monkeypatch
+    ):
+        """A missing kubeconfig must fail with a clear, actionable error."""
+        monkeypatch.delenv("KUBECONFIG", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+
+        hass = MagicMock()
+        hass.config.config_dir = str(tmp_path)
+
+        async def _run_in_executor(func, *args):
+            return func(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=_run_in_executor)
+
+        flux_client = FluxKubernetesClient(
+            hass=hass,
+            access_mode="kubeconfig",
+            kubeconfig_path=str(tmp_path / "nope" / "kubeconfig"),
+        )
+
+        with pytest.raises(KubeconfigNotFound, match="No kubeconfig file"):
+            await flux_client.async_init()
 
     @pytest.mark.asyncio
     async def test_async_create_api_client_offloads_ssl_context_creation(self):

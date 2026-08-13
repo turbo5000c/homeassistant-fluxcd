@@ -76,11 +76,19 @@ _config_flow = _load_config_flow_module()
 _const = sys.modules["fluxcd_k8s.const"]
 
 
+def _hass_with_config_dir(config_dir: str = "/config") -> AsyncMock:
+    """Return a hass mock whose config directory is a real string."""
+    hass = AsyncMock()
+    hass.config = MagicMock()
+    hass.config.config_dir = config_dir
+    return hass
+
+
 class TestValidateInput:
     @pytest.mark.asyncio
     async def test_kubeconfig_path_check_runs_in_executor(self):
-        hass = AsyncMock()
-        hass.async_add_executor_job = AsyncMock(return_value=False)
+        hass = _hass_with_config_dir()
+        hass.async_add_executor_job = AsyncMock(return_value=None)
 
         data = {
             _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
@@ -91,13 +99,15 @@ class TestValidateInput:
             await _config_flow.validate_input(hass, data)
 
         hass.async_add_executor_job.assert_awaited_once_with(
-            _config_flow.os.path.isfile, "/does/not/exist"
+            _config_flow.resolve_kubeconfig_path,
+            "/does/not/exist",
+            _config_flow.get_search_dirs("/config"),
         )
 
     @pytest.mark.asyncio
     async def test_kubeconfig_valid_path_passes_hass_to_client(self):
-        hass = AsyncMock()
-        hass.async_add_executor_job = AsyncMock(return_value=True)
+        hass = _hass_with_config_dir()
+        hass.async_add_executor_job = AsyncMock(return_value="/does/exist")
 
         mock_client = MagicMock()
         mock_client.async_init = AsyncMock(return_value=None)
@@ -115,7 +125,9 @@ class TestValidateInput:
             result = await _config_flow.validate_input(hass, data)
 
         hass.async_add_executor_job.assert_awaited_once_with(
-            _config_flow.os.path.isfile, "/does/exist"
+            _config_flow.resolve_kubeconfig_path,
+            "/does/exist",
+            _config_flow.get_search_dirs("/config"),
         )
         mock_client_class.assert_called_once_with(
             hass=hass,
@@ -127,4 +139,92 @@ class TestValidateInput:
         mock_client.async_init.assert_awaited_once()
         mock_client.async_test_connection.assert_awaited_once()
         mock_client.async_close.assert_awaited_once()
+        assert result["title"] == "FluxCD (all namespaces)"
+
+    @pytest.mark.asyncio
+    async def test_tilde_kubeconfig_path_is_accepted(self, tmp_path, monkeypatch):
+        """'~/.kube/config' must resolve instead of being rejected as missing."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        kube_dir = tmp_path / ".kube"
+        kube_dir.mkdir()
+        (kube_dir / "config").write_text("apiVersion: v1\n")
+
+        hass = _hass_with_config_dir(str(tmp_path))
+
+        async def _run_in_executor(func, *args):
+            return func(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=_run_in_executor)
+
+        mock_client = MagicMock()
+        mock_client.async_init = AsyncMock(return_value=None)
+        mock_client.async_test_connection = AsyncMock(return_value=True)
+        mock_client.async_close = AsyncMock(return_value=None)
+
+        data = {
+            _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
+            _const.CONF_KUBECONFIG_PATH: "~/.kube/config",
+        }
+
+        with patch.object(
+            _config_flow, "FluxKubernetesClient", return_value=mock_client
+        ) as mock_client_class:
+            result = await _config_flow.validate_input(hass, data)
+
+        # The unexpanded path is stored; expansion happens when it is used.
+        assert mock_client_class.call_args.kwargs["kubeconfig_path"] == "~/.kube/config"
+        assert result["title"] == "FluxCD (all namespaces)"
+
+    @pytest.mark.asyncio
+    async def test_empty_kubeconfig_path_discovers_config_dir_file(
+        self, tmp_path, monkeypatch
+    ):
+        """An empty path falls back to a 'kubeconfig' file in the HA config dir."""
+        monkeypatch.delenv("KUBECONFIG", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+        (tmp_path / "kubeconfig").write_text("apiVersion: v1\n")
+
+        hass = _hass_with_config_dir(str(tmp_path))
+
+        async def _run_in_executor(func, *args):
+            return func(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=_run_in_executor)
+
+        mock_client = MagicMock()
+        mock_client.async_init = AsyncMock(return_value=None)
+        mock_client.async_test_connection = AsyncMock(return_value=True)
+        mock_client.async_close = AsyncMock(return_value=None)
+
+        data = {
+            _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
+            _const.CONF_KUBECONFIG_PATH: "",
+        }
+
+        with patch.object(
+            _config_flow, "FluxKubernetesClient", return_value=mock_client
+        ):
+            result = await _config_flow.validate_input(hass, data)
+
+        assert result["title"] == "FluxCD (all namespaces)"
+
+    @pytest.mark.asyncio
+    async def test_in_cluster_mode_skips_kubeconfig_lookup(self):
+        """In-cluster mode must not look for a kubeconfig file."""
+        hass = _hass_with_config_dir()
+        hass.async_add_executor_job = AsyncMock()
+
+        mock_client = MagicMock()
+        mock_client.async_init = AsyncMock(return_value=None)
+        mock_client.async_test_connection = AsyncMock(return_value=True)
+        mock_client.async_close = AsyncMock(return_value=None)
+
+        data = {_const.CONF_ACCESS_MODE: _const.ACCESS_MODE_IN_CLUSTER}
+
+        with patch.object(
+            _config_flow, "FluxKubernetesClient", return_value=mock_client
+        ):
+            result = await _config_flow.validate_input(hass, data)
+
+        hass.async_add_executor_job.assert_not_awaited()
         assert result["title"] == "FluxCD (all namespaces)"

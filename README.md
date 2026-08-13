@@ -2,13 +2,174 @@
 
 A custom Home Assistant integration that monitors **FluxCD resources in Kubernetes** using **kubernetes-asyncio**. It exposes FluxCD resource status as Home Assistant sensor entities, each appearing as its own top-level device in the HA device registry.
 
-## Companion Lovelace Card
+## Contents
 
-The [**fluxcd-topology-card**](https://github.com/dawg-io/fluxcd-topology-card) is an optional companion custom card for Home Assistant dashboards. It visualizes the relationships between FluxCD resources (GitRepositories, HelmRepositories, HelmCharts, HelmReleases, Kustomizations, and more) as an interactive topology graph directly in your Lovelace UI.
+- [Installation](#installation)
+  - [Before you start](#before-you-start)
+  - [Step 1 — Install the integration](#step-1--install-the-integration)
+  - [Step 2 — Choose how Home Assistant reaches your cluster](#step-2--choose-how-home-assistant-reaches-your-cluster)
+  - [Step 3 — Apply the Kubernetes RBAC](#step-3--apply-the-kubernetes-rbac)
+  - [Step 4 — Add the integration in Home Assistant](#step-4--add-the-integration-in-home-assistant)
+  - [Troubleshooting](#troubleshooting)
+- [Features](#features)
+- [Companion Lovelace Card](#companion-lovelace-card)
+- [Resource Categories](#resource-categories)
+- [Sensor States](#sensor-states)
+- [Entity Attributes and Diagnostic Sensors](#entity-attributes-and-diagnostic-sensors)
+- [How It Works](#how-it-works)
+- [Lovelace Dashboard Examples](#lovelace-dashboard-examples)
+- [Project Structure](#project-structure)
+- [License](#license)
 
-It is built to work alongside this integration and enhances the monitoring experience by providing a graphical overview of your FluxCD resource dependencies — but it is entirely optional and not required for this integration to function.
+---
 
-Repository: [fluxcd-topology-card on GitHub](https://github.com/dawg-io/fluxcd-topology-card)
+## Installation
+
+### Before you start
+
+| Requirement | Notes |
+|---|---|
+| Home Assistant 2024.9.1 or newer | Any install type (OS, Container, Supervised, Core) |
+| Python 3.11+ | Already bundled with supported Home Assistant versions |
+| A Kubernetes cluster running FluxCD | Flux v2 CRDs; the Flux Operator is optional |
+| Network access to the Kubernetes API server | From the machine running Home Assistant |
+| `kubernetes-asyncio` | Installed automatically by Home Assistant |
+
+### Step 1 — Install the integration
+
+#### HACS (recommended)
+
+1. In HACS, open the three-dot menu → **Custom repositories**
+2. Add this repository with the category **Integration**
+3. Search for **FluxCD** in HACS and install it
+4. Restart Home Assistant
+
+#### Manual
+
+1. Copy the `custom_components/fluxcd_k8s` directory into your Home Assistant `custom_components` directory (next to `configuration.yaml`):
+   ```bash
+   cp -r custom_components/fluxcd_k8s /path/to/homeassistant/custom_components/
+   ```
+2. Restart Home Assistant
+
+### Step 2 — Choose how Home Assistant reaches your cluster
+
+| Access mode | Use when | What you need |
+|---|---|---|
+| **In-Cluster** | Home Assistant runs as a pod inside the cluster | Nothing — the pod's service account is used automatically |
+| **Kubeconfig File** | Home Assistant runs outside the cluster (HA OS, Container, Supervised, Core) | A kubeconfig file that Home Assistant can read |
+
+**In-Cluster** mode needs no further file setup — skip to [Step 3](#step-3--apply-the-kubernetes-rbac).
+
+#### Where to put the kubeconfig file
+
+Copy your kubeconfig into the Home Assistant **config directory** (the folder that holds `configuration.yaml`, usually `/config`) and name it `kubeconfig`:
+
+```bash
+# Docker / HA Container install, from a machine that has cluster access:
+docker cp ~/.kube/config homeassistant:/config/kubeconfig
+
+# HA OS / Supervised: copy it in with the Samba, SSH, Terminal,
+# or File Editor add-on instead — the destination is the same.
+```
+
+Then either **leave the Kubeconfig Path field empty** (the file is found automatically) or set it to `/config/kubeconfig`.
+
+> **Why the config directory?** On HA OS, Supervised, and Container installs the home directory (`~`, which is `/root`) lives inside the container image, so anything stored there is lost the next time the container is recreated or Home Assistant is updated. The config directory is a mounted volume and survives.
+
+#### What the Kubeconfig Path field accepts
+
+| Value | Result |
+|---|---|
+| _(empty)_ | The default locations below are searched |
+| `/config/kubeconfig` | That exact file is used |
+| `~/.kube/config` | `~` is expanded to the home directory of the user running Home Assistant |
+| `$MY_DIR/kubeconfig` | Environment variables are expanded |
+| `/config/.kube` | A directory — it is searched for `config`, `kubeconfig`, `kubeconfig.yaml`, `kubeconfig.yml` (also inside a `.kube` subdirectory) |
+| `/config/a.yaml:/config/b.yaml` | Multiple `:`-separated files, merged the same way the `KUBECONFIG` environment variable works |
+
+#### Default search order (empty path)
+
+1. Every path listed in the `KUBECONFIG` environment variable
+2. `<config dir>/.kube/` then `<config dir>/` — e.g. `/config/.kube/`, `/config/`
+3. `~/.kube/` then `~/`
+4. `/config/.kube/`, `/config/`, `/root/.kube/`
+
+In each directory the first match of `config`, `kubeconfig`, `kubeconfig.yaml`, or `kubeconfig.yml` is used.
+
+#### Kubeconfig requirements
+
+- Service account tokens, client certificates, and basic auth all work out of the box.
+- `exec:` credential plugins (`aws eks get-token`, `gke-gcloud-auth-plugin`, and similar) only work if that binary exists **inside** the Home Assistant container — usually it does not. Use a service account token instead (see the next step).
+- The API server address must be reachable from Home Assistant, and its certificate must validate — embed `certificate-authority-data` in the kubeconfig if you use a private CA.
+
+### Step 3 — Apply the Kubernetes RBAC
+
+The integration only needs read-only access to FluxCD resources. Apply the included manifest:
+
+```bash
+kubectl apply -f rbac.yaml
+```
+
+This creates a `ClusterRole` named `fluxcd-hass-reader` with `get`, `list`, and `watch` permissions on:
+
+- `gitrepositories`, `helmrepositories`, `helmcharts`, `buckets`, `ocirepositories`, `artifactgenerators`, `externalartifacts` (`source.toolkit.fluxcd.io`)
+- `kustomizations` (`kustomize.toolkit.fluxcd.io`)
+- `helmreleases` (`helm.toolkit.fluxcd.io`)
+- `fluxinstances`, `resourcesets`, `resourcesetinputproviders` (`fluxcd.controlplane.io`)
+
+Edit the `ClusterRoleBinding` subject at the bottom of `rbac.yaml` to match the service account Home Assistant authenticates as (the default is `home-assistant` in the `default` namespace).
+
+> **Controller monitoring** (source-controller, kustomize-controller, etc.) additionally
+> requires `get` and `list` on `deployments` in the `apps` API group. Without it the
+> integration still starts, but no controller entities appear. Add this rule to the
+> ClusterRole in `rbac.yaml` to enable it:
+>
+> ```yaml
+> - apiGroups:
+>     - apps
+>   resources:
+>     - deployments
+>   verbs:
+>     - get
+>     - list
+> ```
+
+### Step 4 — Add the integration in Home Assistant
+
+1. Go to **Settings → Devices & Services**
+2. Click **+ ADD INTEGRATION**
+3. Search for **FluxCD**
+4. Fill in the form:
+
+| Field | Description | Default |
+|---|---|---|
+| **Access Mode** | `In-Cluster` when Home Assistant runs inside Kubernetes, otherwise `Kubeconfig File` | Kubeconfig File |
+| **Kubeconfig Path** | Path to the kubeconfig file — see [Step 2](#step-2--choose-how-home-assistant-reaches-your-cluster). Leave empty to auto-detect | _(empty)_ |
+| **Namespace** | Namespace to monitor; leave empty for all namespaces | _(all namespaces)_ |
+| **Scan Interval** | Poll frequency in seconds (minimum 10, maximum 3600) | 60 |
+| **Label Selector** | Optional Kubernetes label selector, e.g. `app=myapp` | _(none)_ |
+
+You can add the integration more than once — for example one entry per namespace or per label selector.
+
+### Troubleshooting
+
+| Message or symptom | What to do |
+|---|---|
+| *No kubeconfig file was found* | The path does not exist, or nothing was found in the default locations. Copy the file to `/config/kubeconfig`, or enter its full path. A `~` path is fine, but the file must actually exist there. |
+| *Failed to connect to the Kubernetes cluster* | The kubeconfig was found but the cluster could not be reached. Check the API server URL, the certificate, and that the credentials have not expired. |
+| No controller entities | Add the `apps`/`deployments` RBAC rule from [Step 3](#step-3--apply-the-kubernetes-rbac). |
+| A resource type is missing | That CRD is not installed in the cluster; it is skipped silently (visible at debug level). |
+
+Enable debug logging to see which kubeconfig file was chosen and which resources were fetched:
+
+```yaml
+# configuration.yaml
+logger:
+  default: warning
+  logs:
+    custom_components.fluxcd_k8s: debug
+```
 
 ## Features
 
@@ -22,6 +183,14 @@ Repository: [fluxcd-topology-card on GitHub](https://github.com/dawg-io/fluxcd-t
 - **Label selector** filtering for targeted monitoring
 - **Configurable scan interval**
 - **Grouped and per-resource-type fetch functions** for flexible querying
+
+## Companion Lovelace Card
+
+The [**fluxcd-topology-card**](https://github.com/dawg-io/fluxcd-topology-card) is an optional companion custom card for Home Assistant dashboards. It visualizes the relationships between FluxCD resources (GitRepositories, HelmRepositories, HelmCharts, HelmReleases, Kustomizations, and more) as an interactive topology graph directly in your Lovelace UI.
+
+It is built to work alongside this integration and enhances the monitoring experience by providing a graphical overview of your FluxCD resource dependencies — but it is entirely optional and not required for this integration to function.
+
+Repository: [fluxcd-topology-card on GitHub](https://github.com/dawg-io/fluxcd-topology-card)
 
 ## Resource Categories
 
@@ -236,83 +405,6 @@ FluxCD controller Deployments (e.g., source-controller, kustomize-controller) ar
 - `Desired Replicas` — Expected replica count
 - `Ready Replicas` — Ready replica count
 - `Available Replicas` — Available replica count
-
-## Installation
-
-### HACS (Recommended)
-
-1. Add this repository as a custom repository in HACS
-2. Install the "FluxCD" integration
-3. Restart Home Assistant
-
-### Manual Installation
-
-1. Copy the `custom_components/fluxcd_k8s` directory to your Home Assistant `custom_components` directory:
-   ```bash
-   cp -r custom_components/fluxcd_k8s /path/to/homeassistant/custom_components/
-   ```
-2. Restart Home Assistant
-
-## Configuration
-
-1. Go to **Settings → Devices & Services**
-2. Click **+ ADD INTEGRATION**
-3. Search for **FluxCD**
-4. Configure the following:
-   - **Access Mode**: Select `In-Cluster` if Home Assistant runs inside Kubernetes, or `Kubeconfig File` for external access
-   - **Kubeconfig Path**: Path to your kubeconfig file (only needed for Kubeconfig mode; leave empty for the default `~/.kube/config`)
-   - **Namespace**: Kubernetes namespace to monitor (leave empty for all namespaces)
-   - **Scan Interval**: How often to poll FluxCD resources (in seconds, minimum 10, default 60)
-   - **Label Selector**: Optional Kubernetes label selector to filter resources
-
-## Kubernetes RBAC
-
-The integration requires read-only access to FluxCD custom resources. Apply the included RBAC manifest:
-
-```bash
-kubectl apply -f rbac.yaml
-```
-
-This creates a `ClusterRole` with `get`, `list`, and `watch` permissions on:
-- `gitrepositories`, `helmrepositories`, `helmcharts`, `buckets`, `ocirepositories`, `artifactgenerators`, `externalartifacts` (`source.toolkit.fluxcd.io`)
-- `kustomizations` (`kustomize.toolkit.fluxcd.io`)
-- `helmreleases` (`helm.toolkit.fluxcd.io`)
-- `fluxinstances`, `resourcesets`, `resourcesetinputproviders` (`fluxcd.controlplane.io`)
-
-Edit the `ClusterRoleBinding` subject to match your Home Assistant service account.
-
-> **Note:** Controller component monitoring (source-controller, kustomize-controller, etc.)
-> requires `get` and `list` access to `deployments` in the `apps` API group for the
-> `flux-system` namespace. If your service account does not have this permission the
-> integration will still start, but controller entities will not appear. Add the following
-> rule to the ClusterRole in `rbac.yaml` if you want controller monitoring:
->
-> ```yaml
-> - apiGroups:
->     - apps
->   resources:
->     - deployments
->   verbs:
->     - get
->     - list
-> ```
-
-## Project Structure
-
-```
-custom_components/fluxcd_k8s/
-├── __init__.py        # Integration setup and teardown
-├── manifest.json      # Integration metadata and requirements
-├── const.py           # Constants, CRD definitions, and category groupings
-├── config_flow.py     # Configuration UI flow
-├── coordinator.py     # DataUpdateCoordinator for polling
-├── api.py             # Kubernetes API client with grouped/per-type fetch functions
-├── models.py          # Data models and kind-specific parsing helpers
-├── sensor.py          # Sensor entity platform
-├── strings.json       # UI strings
-└── translations/
-    └── en.json        # English translations
-```
 
 ## How It Works
 
@@ -626,13 +718,23 @@ entities:
 > ```
 > Convert each name to a sensor entity ID by replacing hyphens and slashes with underscores, appending the resource type slug, and then `_status`. For example, a Kustomization named `helm-controller` in `flux-system` becomes `sensor.flux_system_helm_controller_kustomizations_status`.
 
-## Requirements
+## Project Structure
 
-- Home Assistant 2024.9.1+
-- Python 3.11+
-- `kubernetes-asyncio` (installed automatically)
-- Kubernetes cluster with FluxCD installed
-- Appropriate RBAC permissions (see above)
+```
+custom_components/fluxcd_k8s/
+├── __init__.py        # Integration setup and teardown
+├── manifest.json      # Integration metadata and requirements
+├── const.py           # Constants, CRD definitions, and category groupings
+├── config_flow.py     # Configuration UI flow
+├── coordinator.py     # DataUpdateCoordinator for polling
+├── api.py             # Kubernetes API client with grouped/per-type fetch functions
+├── kubeconfig.py      # Kubeconfig path expansion and default-location discovery
+├── models.py          # Data models and kind-specific parsing helpers
+├── sensor.py          # Sensor entity platform
+├── strings.json       # UI strings
+└── translations/
+    └── en.json        # English translations
+```
 
 ## License
 
