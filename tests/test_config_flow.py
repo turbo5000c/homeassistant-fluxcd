@@ -96,18 +96,22 @@ class TestValidateInput:
     @pytest.mark.asyncio
     async def test_kubeconfig_path_check_runs_in_executor(self):
         hass = _hass_with_config_dir()
-        hass.async_add_executor_job = AsyncMock(return_value=None)
+        hass.async_add_executor_job = AsyncMock(
+            side_effect=_kubeconfig.KubeconfigNotFound(
+                "No kubeconfig file found at '/does/not/exist'."
+            )
+        )
 
         data = {
             _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
             _const.CONF_KUBECONFIG_PATH: "/does/not/exist",
         }
 
-        with pytest.raises(_config_flow.InvalidKubeconfigPath):
+        with pytest.raises(_config_flow.InvalidKubeconfigPath, match="does/not/exist"):
             await _config_flow.validate_input(hass, data)
 
         hass.async_add_executor_job.assert_awaited_once_with(
-            _config_flow.resolve_kubeconfig_path,
+            _config_flow.require_kubeconfig_path,
             "/does/not/exist",
             _config_flow.get_search_dirs_for_hass(hass),
         )
@@ -133,7 +137,7 @@ class TestValidateInput:
             result = await _config_flow.validate_input(hass, data)
 
         hass.async_add_executor_job.assert_awaited_once_with(
-            _config_flow.resolve_kubeconfig_path,
+            _config_flow.require_kubeconfig_path,
             "/does/exist",
             _config_flow.get_search_dirs_for_hass(hass),
         )
@@ -246,6 +250,34 @@ class TestValidateInput:
         mock_client.async_close.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_missing_path_error_names_what_was_tried(self, tmp_path, monkeypatch):
+        """The raised message must be the real, path-specific KubeconfigNotFound text.
+
+        Regression coverage for a report where '~/.kube/config' failed silently on
+        Home Assistant OS: the exception now names what '~' actually expanded to.
+        """
+        monkeypatch.setenv("HOME", str(tmp_path))  # nothing at tmp_path/.kube/config
+        hass = _hass_with_config_dir(str(tmp_path))
+
+        async def _run_in_executor(func, *args):
+            return func(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=_run_in_executor)
+
+        data = {
+            _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
+            _const.CONF_KUBECONFIG_PATH: "~/.kube/config",
+        }
+
+        with pytest.raises(_config_flow.InvalidKubeconfigPath) as exc_info:
+            await _config_flow.validate_input(hass, data)
+
+        message = str(exc_info.value)
+        assert "~/.kube/config" in message
+        assert str(tmp_path / ".kube" / "config") in message
+        assert "Home Assistant container" in message
+
+    @pytest.mark.asyncio
     async def test_in_cluster_mode_skips_kubeconfig_lookup(self):
         """In-cluster mode must not look for a kubeconfig file."""
         hass = _hass_with_config_dir()
@@ -265,3 +297,71 @@ class TestValidateInput:
 
         hass.async_add_executor_job.assert_not_awaited()
         assert result["title"] == "FluxCD (all namespaces)"
+
+
+class TestAsyncStepUser:
+    """Tests for ConfigFlow.async_step_user's error/placeholder wiring."""
+
+    def _make_flow(self, hass) -> object:
+        flow = _config_flow.ConfigFlow()
+        flow.hass = hass
+        flow.async_set_unique_id = AsyncMock()
+        flow._abort_if_unique_id_configured = MagicMock(return_value=None)
+        flow.async_show_form = MagicMock(side_effect=lambda **kwargs: kwargs)
+        flow.async_create_entry = MagicMock(side_effect=lambda **kwargs: kwargs)
+        return flow
+
+    @pytest.mark.asyncio
+    async def test_invalid_kubeconfig_path_detail_reaches_the_form(self):
+        """The specific KubeconfigNotFound message must reach description_placeholders.
+
+        This is what makes a '~ doesn't work on HA OS' failure self-diagnosable
+        from the config flow form itself, not just the logs.
+        """
+        hass = _hass_with_config_dir()
+        hass.async_add_executor_job = AsyncMock(
+            side_effect=_kubeconfig.KubeconfigNotFound(
+                "No kubeconfig file found at '~/.kube/config' (resolved to "
+                "'/root/.kube/config'). On Home Assistant OS, Supervised, and "
+                "Container installs '~' resolves inside the Home Assistant "
+                "container itself."
+            )
+        )
+        flow = self._make_flow(hass)
+
+        data = {
+            _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
+            _const.CONF_KUBECONFIG_PATH: "~/.kube/config",
+            _const.CONF_NAMESPACE: "",
+            _const.CONF_LABEL_SELECTOR: "",
+        }
+
+        result = await flow.async_step_user(data)
+
+        assert result["errors"]["base"] == "invalid_kubeconfig_path"
+        assert "/root/.kube/config" in result["description_placeholders"]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_cannot_connect_leaves_placeholders_empty(self):
+        """A non-path error must not carry a stale/irrelevant detail placeholder."""
+        hass = _hass_with_config_dir()
+        hass.async_add_executor_job = AsyncMock(return_value="/config/kubeconfig")
+        flow = self._make_flow(hass)
+
+        mock_client = MagicMock()
+        mock_client.async_init = AsyncMock(return_value=None)
+        mock_client.async_test_connection = AsyncMock(return_value=False)
+        mock_client.async_close = AsyncMock(return_value=None)
+
+        data = {
+            _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
+            _const.CONF_KUBECONFIG_PATH: "/config/kubeconfig",
+            _const.CONF_NAMESPACE: "",
+            _const.CONF_LABEL_SELECTOR: "",
+        }
+
+        with patch.object(_config_flow, "FluxKubernetesClient", return_value=mock_client):
+            result = await flow.async_step_user(data)
+
+        assert result["errors"]["base"] == "cannot_connect"
+        assert result["description_placeholders"] is None

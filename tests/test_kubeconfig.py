@@ -206,3 +206,50 @@ class TestRequireKubeconfigPath:
     def test_error_lists_searched_directories(self, tmp_path):
         with pytest.raises(KubeconfigNotFound, match="/config"):
             require_kubeconfig_path("", ["/config", "~/.kube"])
+
+    def test_missing_tilde_path_shows_what_it_expanded_to(self, tmp_path):
+        """The error must reveal the resolved path, not just echo the raw input.
+
+        This is what makes 'doesn't work on HA OS' self-diagnosable: on HA OS,
+        Supervised, and Container installs '~' silently resolves to a path
+        inside the Home Assistant container (typically /root) rather than
+        anywhere reachable by Samba/SSH/File Editor, so the raw path alone
+        gives no clue why it failed.
+        """
+        with pytest.raises(KubeconfigNotFound) as exc_info:
+            require_kubeconfig_path("~/.kube/config", [])
+
+        message = str(exc_info.value)
+        assert "~/.kube/config" in message
+        assert os.path.expanduser("~/.kube/config") in message
+        assert "resolved to" in message
+
+    def test_missing_tilde_path_names_the_container_reachability_gotcha(self):
+        with pytest.raises(KubeconfigNotFound, match="Home Assistant container"):
+            require_kubeconfig_path("~/.kube/config", [])
+        with pytest.raises(KubeconfigNotFound, match="/config/kubeconfig"):
+            require_kubeconfig_path("~/.kube/config", [])
+
+    def test_missing_absolute_path_has_no_tilde_specific_guidance(self, tmp_path):
+        """A plain missing absolute path is a typo, not the HA-OS container gotcha."""
+        missing = str(tmp_path / "typo" / "kubeconfig")
+        with pytest.raises(KubeconfigNotFound) as exc_info:
+            require_kubeconfig_path(missing, [])
+
+        message = str(exc_info.value)
+        assert "Home Assistant container" not in message
+        assert "resolved to" not in message  # nothing to expand, so nothing to show
+        assert "Enter the full path" in message
+
+    def test_missing_env_var_path_expands_without_tilde_guidance(
+        self, tmp_path, monkeypatch
+    ):
+        """$VAR expansion should be shown, but isn't the '~' container gotcha."""
+        monkeypatch.setenv("MY_KUBE_DIR", str(tmp_path / "opt"))
+        with pytest.raises(KubeconfigNotFound) as exc_info:
+            require_kubeconfig_path("$MY_KUBE_DIR/kubeconfig", [])
+
+        message = str(exc_info.value)
+        assert str(tmp_path / "opt" / "kubeconfig") in message
+        assert "resolved to" in message
+        assert "Home Assistant container" not in message

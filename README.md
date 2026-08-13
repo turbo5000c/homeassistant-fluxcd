@@ -81,15 +81,15 @@ docker cp ~/.kube/config homeassistant:/config/kubeconfig
 
 Then either **leave the Kubeconfig Path field empty** (the file is found automatically) or set it to `/config/kubeconfig`.
 
-> **Why the config directory?** On HA OS, Supervised, and Container installs the home directory (`~`, which is `/root`) lives inside the container image, so anything stored there is lost the next time the container is recreated or Home Assistant is updated. The config directory is a mounted volume and survives.
+> **Why the config directory, not `~`?** On HA OS, Supervised, and Container installs, Home Assistant runs inside its own container, where `~` resolves to *that container's* home directory (typically `/root`) — not to anything the Samba, SSH & Terminal, File Editor, or Studio Code Server add-ons can see. There is no supported way to place a file there, so a kubeconfig "copied to `~/.kube/config`" through any of those add-ons never actually reaches it. `/config` is the one directory every add-on shares with Home Assistant, and it also survives container recreation and updates, which `~` would not even if it were reachable.
 
 #### What the Kubeconfig Path field accepts
 
 | Value | Result |
 |---|---|
 | _(empty)_ | The default locations below are searched |
-| `/config/kubeconfig` | That exact file is used |
-| `~/.kube/config` | `~` is expanded to the home directory of the user running Home Assistant |
+| `/config/kubeconfig` | That exact file is used — **recommended for HA OS, Supervised, and Container** |
+| `~/.kube/config` | `~` expands to the home directory of the *Home Assistant process*. Reliable only on Core (pip/venv) installs, where that's your own user account — see the callout above for why it fails on HA OS/Supervised/Container |
 | `$MY_DIR/kubeconfig` | Environment variables are expanded |
 | `/config/.kube` | A directory — it is searched for `config`, `kubeconfig`, `kubeconfig.yaml`, `kubeconfig.yml` (also inside a `.kube` subdirectory) |
 | `/config/a.yaml:/config/b.yaml` | Multiple `:`-separated files, merged the same way the `KUBECONFIG` environment variable works |
@@ -162,7 +162,8 @@ You can add the integration more than once — for example one entry per namespa
 
 | Message or symptom | What to do |
 |---|---|
-| *No kubeconfig file was found* | The path does not exist, or nothing was found in the default locations. Copy the file to `/config/kubeconfig`, or enter its full path. A `~` path is fine, but the file must actually exist there. |
+| *No kubeconfig file was found* | The error names the exact path it looked for, including what `~` or `$VARS` expanded to — check that against where you actually put the file. Otherwise copy the file to `/config/kubeconfig` and use that. |
+| `~/.kube/config` doesn't work, but `/config/kubeconfig` does | Expected on HA OS, Supervised, and Container — see [Where to put the kubeconfig file](#where-to-put-the-kubeconfig-file). `~` resolves inside the Home Assistant container itself, which none of the file-access add-ons can reach. `/config/kubeconfig` is the reliable path on every install type. |
 | *Failed to connect to the Kubernetes cluster* | The kubeconfig was found but the cluster could not be reached. Check the API server URL, the certificate, and that the credentials have not expired. |
 | No controller entities | Add the `apps`/`deployments` RBAC rule from [Step 3](#step-3--apply-the-kubernetes-rbac). |
 | A resource type is missing | That CRD is not installed in the cluster; it is skipped silently (visible at debug level). |

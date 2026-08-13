@@ -28,7 +28,7 @@ from .const import (
 from .kubeconfig import (
     KubeconfigNotFound,
     get_search_dirs_for_hass,
-    resolve_kubeconfig_path,
+    require_kubeconfig_path,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,15 +64,18 @@ async def validate_input(
 
     # Resolve the kubeconfig location before attempting to connect. The path may
     # use ~ or environment variables, point at a directory, or be left empty —
-    # in which case the well-known locations are searched.
+    # in which case the well-known locations are searched. require_kubeconfig_path
+    # raises with a message naming exactly what was tried, which is carried
+    # through to the form so the user isn't left guessing why '~' didn't work.
     if access_mode == ACCESS_MODE_KUBECONFIG:
-        resolved_path = await hass.async_add_executor_job(
-            resolve_kubeconfig_path,
-            kubeconfig_path,
-            get_search_dirs_for_hass(hass),
-        )
-        if not resolved_path:
-            raise InvalidKubeconfigPath
+        try:
+            resolved_path = await hass.async_add_executor_job(
+                require_kubeconfig_path,
+                kubeconfig_path,
+                get_search_dirs_for_hass(hass),
+            )
+        except KubeconfigNotFound as err:
+            raise InvalidKubeconfigPath(str(err)) from err
         _LOGGER.debug("Resolved kubeconfig path to %s", resolved_path)
 
     k8s_client = FluxKubernetesClient(
@@ -94,7 +97,7 @@ async def validate_input(
         # turned out to be unreadable — report it as a path problem so the
         # user sees the actionable message instead of "cannot connect".
         _LOGGER.debug("Kubeconfig became unusable during validation: %s", err)
-        raise InvalidKubeconfigPath from err
+        raise InvalidKubeconfigPath(str(err)) from err
     except Exception as err:
         _LOGGER.exception("Unexpected error during connection test")
         raise CannotConnect from err
@@ -117,14 +120,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle the initial step."""
         errors: dict[str, str] = {}
+        description_placeholders: dict[str, str] = {}
 
         if user_input is not None:
             try:
                 info = await validate_input(self.hass, user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
-            except InvalidKubeconfigPath:
+            except InvalidKubeconfigPath as err:
                 errors["base"] = "invalid_kubeconfig_path"
+                if err.args:
+                    description_placeholders["detail"] = str(err)
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
@@ -149,6 +155,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
+            description_placeholders=description_placeholders or None,
         )
 
 

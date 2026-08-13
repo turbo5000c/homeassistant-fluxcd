@@ -115,6 +115,21 @@ def resolve_path_entry(path: str) -> str | None:
     return _find_in_dir(expanded)
 
 
+def _describe_missing_path(raw_entry: str) -> str:
+    """Describe a path that could not be found, including what it expanded to.
+
+    A ``~`` expands correctly but silently — on Home Assistant OS, Supervised,
+    and Container installs it resolves to the home directory *inside the Home
+    Assistant container* (typically ``/root``), which is not reachable through
+    Samba, SSH & Terminal, or File Editor.  Showing the expansion is what makes
+    that failure self-diagnosing instead of a bare "not found".
+    """
+    expanded = expand_path(raw_entry)
+    if expanded == raw_entry.strip():
+        return f"'{raw_entry}'"
+    return f"'{raw_entry}' (resolved to '{expanded}')"
+
+
 def _resolve_path_list(paths: str, *, warn_missing: bool) -> str | None:
     """Resolve an ``os.pathsep`` separated list to the entries that exist.
 
@@ -131,10 +146,14 @@ def _resolve_path_list(paths: str, *, warn_missing: bool) -> str | None:
             resolved.append(match)
         elif warn_missing:
             _LOGGER.warning(
-                "Configured kubeconfig path does not exist, skipping: %s", entry
+                "Configured kubeconfig path does not exist, skipping: %s",
+                _describe_missing_path(entry),
             )
         else:
-            _LOGGER.debug("Kubeconfig path does not exist, skipping: %s", entry)
+            _LOGGER.debug(
+                "Kubeconfig path does not exist, skipping: %s",
+                _describe_missing_path(entry),
+            )
     return os.pathsep.join(resolved) if resolved else None
 
 
@@ -188,10 +207,22 @@ def require_kubeconfig_path(
         return resolved
 
     if configured_path and configured_path.strip():
+        if "~" in configured_path:
+            guidance = (
+                "On Home Assistant OS, Supervised, and Container installs '~' "
+                "resolves inside the Home Assistant container itself, which the "
+                "Samba, SSH & Terminal, and File Editor add-ons cannot reach. Copy "
+                "the file to the Home Assistant config directory and use "
+                "/config/kubeconfig instead."
+            )
+        else:
+            guidance = (
+                "Enter the full path to the file (for example /config/kubeconfig) "
+                "or leave the field empty to search the default locations."
+            )
         raise KubeconfigNotFound(
-            f"No kubeconfig file found at '{configured_path}'. Enter the full path "
-            "to the file (for example /config/kubeconfig) or leave the field empty "
-            "to search the default locations."
+            f"No kubeconfig file found at {_describe_missing_path(configured_path)}. "
+            f"{guidance}"
         )
     searched = search_dirs if search_dirs is not None else get_search_dirs()
     raise KubeconfigNotFound(

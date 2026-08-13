@@ -13,7 +13,7 @@
         },
         "data_description": {
           "access_mode": "Select 'In-Cluster' if Home Assistant runs inside Kubernetes, or 'Kubeconfig File' for external access",
-          "kubeconfig_path": "Path to the kubeconfig file, e.g. /config/kubeconfig or ~/.kube/config (a directory containing the file also works). Leave empty to search KUBECONFIG, the Home Assistant config directory, and ~/.kube. Only used with Kubeconfig mode",
+          "kubeconfig_path": "Path to the kubeconfig file — /config/kubeconfig is recommended (a directory also works). '~' only resolves reliably on Core installs. Leave empty to auto-detect. Only used with Kubeconfig mode",
           "namespace": "Kubernetes namespace to monitor (leave empty for all namespaces)",
           "scan_interval": "How often to poll FluxCD resources (in seconds, minimum 10)",
           "label_selector": "Optional Kubernetes label selector to filter resources (e.g. 'app=myapp')"
@@ -22,7 +22,7 @@
     },
     "error": {
       "cannot_connect": "Failed to connect to the Kubernetes cluster. Please check your configuration.",
-      "invalid_kubeconfig_path": "No kubeconfig file was found. Enter the full path to the file (e.g. /config/kubeconfig or ~/.kube/config), or leave the field empty to search KUBECONFIG, the Home Assistant config directory, and ~/.kube.",
+      "invalid_kubeconfig_path": "{detail}",
       "unknown": "An unexpected error occurred. Please check the logs for more details."
     },
     "abort": {
