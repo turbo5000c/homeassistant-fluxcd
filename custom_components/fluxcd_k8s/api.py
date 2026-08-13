@@ -32,7 +32,11 @@ from .const import (
     FLUX_RESOURCESETINPUTPROVIDER,
     FLUX_SOURCES,
 )
-from .kubeconfig import KubeconfigNotFound, get_search_dirs, require_kubeconfig_path
+from .kubeconfig import (
+    KubeconfigNotFound,
+    get_search_dirs_for_hass,
+    require_kubeconfig_path,
+)
 from .models import FluxResource, parse_controller_deployment, parse_flux_resource
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,7 +96,7 @@ class FluxKubernetesClient:
             kubeconfig = await self._hass.async_add_executor_job(
                 self._load_kubeconfig,
                 self._kubeconfig_path or None,
-                self._kubeconfig_search_dirs(),
+                get_search_dirs_for_hass(self._hass),
             )
             client_configuration = client.Configuration()
             await config.load_kube_config_from_dict(
@@ -100,15 +104,6 @@ class FluxKubernetesClient:
                 client_configuration=client_configuration,
             )
             self._api_client = await self._async_create_api_client(client_configuration)
-
-    def _kubeconfig_search_dirs(self) -> list[str]:
-        """Return the directories to search when no kubeconfig path is set.
-
-        The Home Assistant config directory is included so a kubeconfig stored
-        next to configuration.yaml (e.g. /config/kubeconfig) is picked up.
-        """
-        config_dir = getattr(self._hass.config, "config_dir", None)
-        return get_search_dirs(config_dir if isinstance(config_dir, str) else None)
 
     @staticmethod
     def _load_kubeconfig(
@@ -121,11 +116,18 @@ class FluxKubernetesClient:
         """
         kubeconfig_path = require_kubeconfig_path(config_file, search_dirs)
         _LOGGER.debug("Loading kubeconfig from %s", kubeconfig_path)
-        merged = config.kube_config.KubeConfigMerger(kubeconfig_path).config
+        try:
+            merged = config.kube_config.KubeConfigMerger(kubeconfig_path).config
+        except Exception as err:
+            # An empty or non-mapping file makes KubeConfigMerger fail deep
+            # inside the library; report the file we chose instead.
+            raise KubeconfigNotFound(
+                f"The kubeconfig file at '{kubeconfig_path}' is empty or is not "
+                f"valid kubeconfig YAML: {err}"
+            ) from err
         if merged is None:
             raise KubeconfigNotFound(
-                f"The kubeconfig file at '{kubeconfig_path}' is empty or could not "
-                "be parsed as YAML."
+                f"The kubeconfig file at '{kubeconfig_path}' is empty."
             )
         return merged
 

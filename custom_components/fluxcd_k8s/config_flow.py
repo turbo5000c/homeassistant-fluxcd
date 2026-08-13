@@ -25,7 +25,11 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
-from .kubeconfig import get_search_dirs, resolve_kubeconfig_path
+from .kubeconfig import (
+    KubeconfigNotFound,
+    get_search_dirs_for_hass,
+    resolve_kubeconfig_path,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,11 +66,10 @@ async def validate_input(
     # use ~ or environment variables, point at a directory, or be left empty —
     # in which case the well-known locations are searched.
     if access_mode == ACCESS_MODE_KUBECONFIG:
-        config_dir = getattr(hass.config, "config_dir", None)
         resolved_path = await hass.async_add_executor_job(
             resolve_kubeconfig_path,
             kubeconfig_path,
-            get_search_dirs(config_dir if isinstance(config_dir, str) else None),
+            get_search_dirs_for_hass(hass),
         )
         if not resolved_path:
             raise InvalidKubeconfigPath
@@ -86,8 +89,12 @@ async def validate_input(
             raise CannotConnect
     except CannotConnect:
         raise
-    except InvalidKubeconfigPath:
-        raise
+    except KubeconfigNotFound as err:
+        # The file disappeared between the check above and the load, or it
+        # turned out to be unreadable — report it as a path problem so the
+        # user sees the actionable message instead of "cannot connect".
+        _LOGGER.debug("Kubeconfig became unusable during validation: %s", err)
+        raise InvalidKubeconfigPath from err
     except Exception as err:
         _LOGGER.exception("Unexpected error during connection test")
         raise CannotConnect from err

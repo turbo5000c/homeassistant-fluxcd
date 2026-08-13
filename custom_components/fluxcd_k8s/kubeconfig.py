@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,15 +28,14 @@ KUBECONFIG_FILENAMES: tuple[str, ...] = (
     "kubeconfig.yml",
 )
 
-# Directories searched when the kubeconfig path is left empty.  The Home
-# Assistant config directory is added on top of these at runtime, see
-# async_get_search_dirs().
+# Directories searched when the kubeconfig path is left empty.  Each one is
+# probed via its ``.kube`` subdirectory first and then directly, so listing
+# ``~`` also covers ``~/.kube``.  The Home Assistant config directory is added
+# in front of these at runtime, see get_search_dirs().
 DEFAULT_SEARCH_DIRS: tuple[str, ...] = (
-    "~/.kube",
     "~",
-    "/config/.kube",
     "/config",
-    "/root/.kube",
+    "/root",
 )
 
 
@@ -49,23 +48,35 @@ def get_search_dirs(config_dir: str | None = None) -> list[str]:
 
     ``config_dir`` is the Home Assistant configuration directory (``/config``
     on container/OS installs, ``~/.homeassistant`` on core installs).  It is
-    searched first, both directly and via a ``.kube`` subdirectory, so a
-    kubeconfig placed next to ``configuration.yaml`` is found automatically.
+    searched first so a kubeconfig placed next to ``configuration.yaml`` is
+    found automatically.
     """
-    dirs: list[str] = []
-    if config_dir:
-        dirs.extend([os.path.join(config_dir, ".kube"), config_dir])
+    dirs: list[str] = [config_dir] if config_dir else []
     dirs.extend(DEFAULT_SEARCH_DIRS)
 
     # Preserve order while dropping duplicates (e.g. a container install where
-    # config_dir is already /config).
+    # config_dir is already /config, possibly with a trailing separator).
     seen: set[str] = set()
     unique_dirs: list[str] = []
     for directory in dirs:
-        if directory and directory not in seen:
-            seen.add(directory)
+        if not directory:
+            continue
+        key = os.path.normpath(directory)
+        if key not in seen:
+            seen.add(key)
             unique_dirs.append(directory)
     return unique_dirs
+
+
+def get_search_dirs_for_hass(hass) -> list[str]:
+    """Return the search directories for a Home Assistant instance.
+
+    Only reads attributes, so it is safe to call on the event loop.  Keeping
+    this in one place stops the config flow and the API client from disagreeing
+    about where a kubeconfig may live.
+    """
+    config_dir = getattr(getattr(hass, "config", None), "config_dir", None)
+    return get_search_dirs(config_dir if isinstance(config_dir, str) else None)
 
 
 def expand_path(path: str) -> str:
@@ -74,8 +85,12 @@ def expand_path(path: str) -> str:
 
 
 def _find_in_dir(directory: str) -> str | None:
-    """Return the first known kubeconfig file name inside ``directory``."""
-    for candidate_dir in (directory, os.path.join(directory, ".kube")):
+    """Return the first known kubeconfig file name inside ``directory``.
+
+    A ``.kube`` subdirectory is checked first so the kubectl default
+    (``~/.kube/config``) wins over a stray ``~/kubeconfig``.
+    """
+    for candidate_dir in (os.path.join(directory, ".kube"), directory):
         if not os.path.isdir(candidate_dir):
             continue
         for filename in KUBECONFIG_FILENAMES:
@@ -100,20 +115,27 @@ def resolve_path_entry(path: str) -> str | None:
     return _find_in_dir(expanded)
 
 
-def _env_kubeconfig_entries() -> list[str]:
-    """Return the path entries from the KUBECONFIG environment variable."""
-    env_value = os.environ.get("KUBECONFIG", "")
-    return [entry for entry in env_value.split(os.pathsep) if entry.strip()]
+def _resolve_path_list(paths: str, *, warn_missing: bool) -> str | None:
+    """Resolve an ``os.pathsep`` separated list to the entries that exist.
 
-
-def _candidate_paths(search_dirs: Iterable[str]) -> list[str]:
-    """Return every path to probe when no kubeconfig path is configured."""
-    candidates = _env_kubeconfig_entries()
-    for directory in search_dirs:
-        candidates.extend(
-            os.path.join(directory, filename) for filename in KUBECONFIG_FILENAMES
-        )
-    return candidates
+    Missing entries are skipped rather than failing the whole list, which is
+    how kubectl treats ``KUBECONFIG``.  Returns the surviving entries joined
+    back together so they are merged downstream, or None if none exist.
+    """
+    resolved: list[str] = []
+    for entry in paths.split(os.pathsep):
+        if not entry.strip():
+            continue
+        match = resolve_path_entry(entry)
+        if match:
+            resolved.append(match)
+        elif warn_missing:
+            _LOGGER.warning(
+                "Configured kubeconfig path does not exist, skipping: %s", entry
+            )
+        else:
+            _LOGGER.debug("Kubeconfig path does not exist, skipping: %s", entry)
+    return os.pathsep.join(resolved) if resolved else None
 
 
 def resolve_kubeconfig_path(
@@ -124,35 +146,28 @@ def resolve_kubeconfig_path(
 
     When ``configured_path`` is set it is expanded and may point at a file, a
     directory, or an ``os.pathsep`` separated list of either (the same syntax
-    the ``KUBECONFIG`` environment variable uses).  Entries that do not exist
-    are skipped, matching kubectl behavior.
+    the ``KUBECONFIG`` environment variable uses).
 
     When ``configured_path`` is empty the ``KUBECONFIG`` environment variable
-    and then ``search_dirs`` are probed for a file named ``config``,
-    ``kubeconfig``, ``kubeconfig.yaml``, or ``kubeconfig.yml``.
+    is used if it names any existing file — all of its entries, so a split
+    cluster/credentials setup still merges — and otherwise ``search_dirs`` are
+    probed for a file named ``config``, ``kubeconfig``, ``kubeconfig.yaml``, or
+    ``kubeconfig.yml``.
 
     This performs blocking file system calls — run it in the executor.
     """
     if configured_path and configured_path.strip():
-        resolved: list[str] = []
-        for entry in configured_path.split(os.pathsep):
-            if not entry.strip():
-                continue
-            match = resolve_path_entry(entry)
-            if match:
-                resolved.append(match)
-            else:
-                _LOGGER.warning(
-                    "Configured kubeconfig path does not exist, skipping: %s", entry
-                )
-        if resolved:
-            return os.pathsep.join(resolved)
-        return None
+        return _resolve_path_list(configured_path, warn_missing=True)
 
-    for candidate in _candidate_paths(
-        search_dirs if search_dirs is not None else get_search_dirs()
-    ):
-        match = resolve_path_entry(candidate)
+    from_env = _resolve_path_list(
+        os.environ.get("KUBECONFIG", ""), warn_missing=False
+    )
+    if from_env:
+        _LOGGER.debug("Using kubeconfig from the KUBECONFIG variable: %s", from_env)
+        return from_env
+
+    for directory in search_dirs if search_dirs is not None else get_search_dirs():
+        match = _find_in_dir(expand_path(directory))
         if match:
             _LOGGER.debug("Using auto-discovered kubeconfig file: %s", match)
             return match

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import os
+import types
 
 import pytest
+from fluxcd_k8s import kubeconfig as kc
 from fluxcd_k8s.kubeconfig import (
-    DEFAULT_SEARCH_DIRS,
     KubeconfigNotFound,
     expand_path,
     get_search_dirs,
+    get_search_dirs_for_hass,
     require_kubeconfig_path,
     resolve_kubeconfig_path,
     resolve_path_entry,
@@ -18,10 +20,16 @@ from fluxcd_k8s.kubeconfig import (
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch, tmp_path):
-    """Keep the host's real kubeconfig out of every test."""
+    """Keep the host's real kubeconfig out of every test.
+
+    DEFAULT_SEARCH_DIRS holds absolute paths (/config, /root) that exist on the
+    machines this integration targets, so it is redirected at the temporary
+    home as well — otherwise a host kubeconfig would decide the result.
+    """
     monkeypatch.delenv("KUBECONFIG", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "home").mkdir()
+    monkeypatch.setattr(kc, "DEFAULT_SEARCH_DIRS", ("~",))
 
 
 def _write_kubeconfig(path):
@@ -111,27 +119,78 @@ class TestResolveKubeconfigPath:
         _write_kubeconfig(tmp_path / "home" / ".kube" / "config")
         assert resolve_kubeconfig_path("", get_search_dirs()) == expected
 
+    def test_kubeconfig_env_var_keeps_every_existing_entry(
+        self, tmp_path, monkeypatch
+    ):
+        """A split cluster/credentials KUBECONFIG must still be merged."""
+        first = _write_kubeconfig(tmp_path / "env" / "cluster.yaml")
+        second = _write_kubeconfig(tmp_path / "env" / "user.yaml")
+        monkeypatch.setenv("KUBECONFIG", os.pathsep.join([first, second]))
+        assert resolve_kubeconfig_path("", get_search_dirs()) == os.pathsep.join(
+            [first, second]
+        )
+
+    def test_kubeconfig_env_var_skips_missing_entries(self, tmp_path, monkeypatch):
+        existing = _write_kubeconfig(tmp_path / "env" / "cluster.yaml")
+        monkeypatch.setenv(
+            "KUBECONFIG", os.pathsep.join([str(tmp_path / "gone.yaml"), existing])
+        )
+        assert resolve_kubeconfig_path("", get_search_dirs()) == existing
+
+    def test_empty_kubeconfig_env_var_falls_back_to_search_dirs(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("KUBECONFIG", str(tmp_path / "does-not-exist"))
+        expected = _write_kubeconfig(tmp_path / "home" / ".kube" / "config")
+        assert resolve_kubeconfig_path("", get_search_dirs()) == expected
+
+    def test_directory_named_config_does_not_shadow_a_real_file(self, tmp_path):
+        """A `config/` directory must not outrank a `kubeconfig` file beside it."""
+        _write_kubeconfig(tmp_path / "search" / "config" / "kubeconfig")
+        expected = _write_kubeconfig(tmp_path / "search" / "kubeconfig")
+        assert resolve_kubeconfig_path("", [str(tmp_path / "search")]) == expected
+
+    def test_dot_kube_wins_over_a_loose_file_in_the_same_dir(self, tmp_path):
+        expected = _write_kubeconfig(tmp_path / "search" / ".kube" / "config")
+        _write_kubeconfig(tmp_path / "search" / "kubeconfig")
+        assert resolve_kubeconfig_path("", [str(tmp_path / "search")]) == expected
+
+    def test_search_dirs_are_expanded(self, tmp_path):
+        expected = _write_kubeconfig(tmp_path / "home" / ".kube" / "config")
+        assert resolve_kubeconfig_path("", ["~"]) == expected
+
     def test_returns_none_when_nothing_exists(self, tmp_path):
         assert resolve_kubeconfig_path("", [str(tmp_path / "nowhere")]) is None
 
 
 class TestGetSearchDirs:
     def test_config_dir_is_searched_first(self):
-        dirs = get_search_dirs("/config")
-        assert dirs[0] == os.path.join("/config", ".kube")
-        assert dirs[1] == "/config"
+        assert get_search_dirs("/config")[0] == "/config"
 
     def test_defaults_are_included(self):
-        dirs = get_search_dirs("/config")
-        for default_dir in DEFAULT_SEARCH_DIRS:
+        dirs = get_search_dirs("/somewhere/else")
+        for default_dir in kc.DEFAULT_SEARCH_DIRS:
             assert default_dir in dirs
 
-    def test_duplicates_are_removed(self):
-        dirs = get_search_dirs("/config")
-        assert len(dirs) == len(set(dirs))
+    def test_duplicates_are_removed(self, monkeypatch):
+        monkeypatch.setattr(kc, "DEFAULT_SEARCH_DIRS", ("~", "/config", "/root"))
+        assert get_search_dirs("/config/") == ["/config/", "~", "/root"]
 
     def test_without_config_dir_returns_defaults(self):
-        assert get_search_dirs() == list(DEFAULT_SEARCH_DIRS)
+        assert get_search_dirs() == list(kc.DEFAULT_SEARCH_DIRS)
+
+
+class TestGetSearchDirsForHass:
+    def test_uses_the_home_assistant_config_dir(self):
+        hass = types.SimpleNamespace(config=types.SimpleNamespace(config_dir="/ha"))
+        assert get_search_dirs_for_hass(hass)[0] == "/ha"
+
+    def test_ignores_a_non_string_config_dir(self):
+        hass = types.SimpleNamespace(config=types.SimpleNamespace(config_dir=object()))
+        assert get_search_dirs_for_hass(hass) == list(kc.DEFAULT_SEARCH_DIRS)
+
+    def test_tolerates_a_hass_without_config(self):
+        assert get_search_dirs_for_hass(object()) == list(kc.DEFAULT_SEARCH_DIRS)
 
 
 class TestRequireKubeconfigPath:

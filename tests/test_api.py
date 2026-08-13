@@ -66,7 +66,19 @@ _api_module = _load_api_module()
 FluxKubernetesClient = _api_module.FluxKubernetesClient
 
 # Imported by api.py via a relative import, so it is already in sys.modules.
-KubeconfigNotFound = sys.modules["fluxcd_k8s.kubeconfig"].KubeconfigNotFound
+_kubeconfig_module = sys.modules["fluxcd_k8s.kubeconfig"]
+KubeconfigNotFound = _kubeconfig_module.KubeconfigNotFound
+
+
+@pytest.fixture(autouse=True)
+def _isolate_kubeconfig_search(monkeypatch):
+    """Stop discovery from reaching a kubeconfig on the machine running tests.
+
+    DEFAULT_SEARCH_DIRS points at /config and /root, which do exist on the
+    systems this integration targets.
+    """
+    monkeypatch.delenv("KUBECONFIG", raising=False)
+    monkeypatch.setattr(_kubeconfig_module, "DEFAULT_SEARCH_DIRS", ())
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +283,7 @@ class TestAsyncInit:
             hass.async_add_executor_job.assert_awaited_once_with(
                 flux_client._load_kubeconfig,
                 str(kubeconfig_file),
-                _api_module.get_search_dirs(str(tmp_path)),
+                _api_module.get_search_dirs_for_hass(hass),
             )
             kube_config_module.KubeConfigMerger.assert_called_once_with(
                 str(kubeconfig_file)
@@ -351,6 +363,42 @@ class TestAsyncInit:
 
         with pytest.raises(KubeconfigNotFound, match="No kubeconfig file"):
             await flux_client.async_init()
+
+    @pytest.mark.asyncio
+    async def test_kubeconfig_init_reports_an_unparseable_file(self, tmp_path):
+        """A file that exists but is not kubeconfig YAML must name the file.
+
+        KubeConfigMerger fails inside the library on an empty file, so the
+        error has to be translated rather than allowed to escape raw.
+        """
+        kubeconfig_file = tmp_path / "kubeconfig"
+        kubeconfig_file.write_text("")
+
+        hass = MagicMock()
+        hass.config.config_dir = str(tmp_path)
+
+        async def _run_in_executor(func, *args):
+            return func(*args)
+
+        hass.async_add_executor_job = AsyncMock(side_effect=_run_in_executor)
+
+        kube_config_module = MagicMock(
+            KubeConfigMerger=MagicMock(
+                side_effect=TypeError("'NoneType' object does not support item assignment")
+            )
+        )
+
+        with patch.object(
+            _api_module.config, "kube_config", kube_config_module, create=True
+        ):
+            flux_client = FluxKubernetesClient(
+                hass=hass,
+                access_mode="kubeconfig",
+                kubeconfig_path=str(kubeconfig_file),
+            )
+
+            with pytest.raises(KubeconfigNotFound, match="is empty or is not"):
+                await flux_client.async_init()
 
     @pytest.mark.asyncio
     async def test_async_create_api_client_offloads_ssl_context_creation(self):

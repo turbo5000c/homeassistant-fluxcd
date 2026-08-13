@@ -74,6 +74,14 @@ def _load_config_flow_module():
 
 _config_flow = _load_config_flow_module()
 _const = sys.modules["fluxcd_k8s.const"]
+_kubeconfig = sys.modules["fluxcd_k8s.kubeconfig"]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_kubeconfig_search(monkeypatch):
+    """Stop discovery from reaching a kubeconfig on the machine running tests."""
+    monkeypatch.delenv("KUBECONFIG", raising=False)
+    monkeypatch.setattr(_kubeconfig, "DEFAULT_SEARCH_DIRS", ())
 
 
 def _hass_with_config_dir(config_dir: str = "/config") -> AsyncMock:
@@ -101,7 +109,7 @@ class TestValidateInput:
         hass.async_add_executor_job.assert_awaited_once_with(
             _config_flow.resolve_kubeconfig_path,
             "/does/not/exist",
-            _config_flow.get_search_dirs("/config"),
+            _config_flow.get_search_dirs_for_hass(hass),
         )
 
     @pytest.mark.asyncio
@@ -127,7 +135,7 @@ class TestValidateInput:
         hass.async_add_executor_job.assert_awaited_once_with(
             _config_flow.resolve_kubeconfig_path,
             "/does/exist",
-            _config_flow.get_search_dirs("/config"),
+            _config_flow.get_search_dirs_for_hass(hass),
         )
         mock_client_class.assert_called_once_with(
             hass=hass,
@@ -207,6 +215,35 @@ class TestValidateInput:
             result = await _config_flow.validate_input(hass, data)
 
         assert result["title"] == "FluxCD (all namespaces)"
+
+    @pytest.mark.asyncio
+    async def test_kubeconfig_lost_during_validation_is_a_path_error(self):
+        """KubeconfigNotFound must not be flattened into 'cannot connect'.
+
+        The pre-check and the actual load are two separate filesystem scans, so
+        the file can disappear in between; the user needs the path message.
+        """
+        hass = _hass_with_config_dir()
+        hass.async_add_executor_job = AsyncMock(return_value="/was/here")
+
+        mock_client = MagicMock()
+        mock_client.async_init = AsyncMock(
+            side_effect=_kubeconfig.KubeconfigNotFound("No kubeconfig file found.")
+        )
+        mock_client.async_close = AsyncMock(return_value=None)
+
+        data = {
+            _const.CONF_ACCESS_MODE: _const.ACCESS_MODE_KUBECONFIG,
+            _const.CONF_KUBECONFIG_PATH: "/was/here",
+        }
+
+        with (
+            patch.object(_config_flow, "FluxKubernetesClient", return_value=mock_client),
+            pytest.raises(_config_flow.InvalidKubeconfigPath),
+        ):
+            await _config_flow.validate_input(hass, data)
+
+        mock_client.async_close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_in_cluster_mode_skips_kubeconfig_lookup(self):

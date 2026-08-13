@@ -8,7 +8,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 
 from .api import FluxKubernetesClient
@@ -24,6 +24,7 @@ from .const import (
     FLUX_RESOURCES,
 )
 from .coordinator import FluxCDCoordinator
+from .kubeconfig import KubeconfigNotFound
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +50,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     try:
         await k8s_client.async_init()
+    except KubeconfigNotFound as err:
+        # Not transient: retrying on a backoff will never find a file that is
+        # not there. Surface it as a config error the user can act on.
+        raise ConfigEntryError(str(err)) from err
     except Exception as err:
         raise ConfigEntryNotReady(
             f"Failed to initialize Kubernetes client: {err}"

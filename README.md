@@ -90,12 +90,12 @@ Then either **leave the Kubeconfig Path field empty** (the file is found automat
 
 #### Default search order (empty path)
 
-1. Every path listed in the `KUBECONFIG` environment variable
-2. `<config dir>/.kube/` then `<config dir>/` — e.g. `/config/.kube/`, `/config/`
-3. `~/.kube/` then `~/`
-4. `/config/.kube/`, `/config/`, `/root/.kube/`
+1. The `KUBECONFIG` environment variable — if it names any existing file, **all** of its entries are used and merged, so a split cluster/credentials setup keeps working
+2. The Home Assistant config directory: `.kube/` inside it, then the directory itself — e.g. `/config/.kube/`, then `/config/`
+3. `~/.kube/`, then `~/`
+4. `/config/.kube/`, `/config/`, `/root/.kube/`, `/root/` — skipped where they repeat the config directory from step 2
 
-In each directory the first match of `config`, `kubeconfig`, `kubeconfig.yaml`, or `kubeconfig.yml` is used.
+In each directory the first match of `config`, `kubeconfig`, `kubeconfig.yaml`, or `kubeconfig.yml` is used. The chosen file is written to the debug log.
 
 #### Kubeconfig requirements
 
