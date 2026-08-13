@@ -1,5 +1,11 @@
 # Home Assistant integration for FluxCD GitOps status and resources
 
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
+[![GitHub Release](https://img.shields.io/github/v/release/dawg-io/homeassistant-fluxcd?style=for-the-badge&color=green)](https://github.com/dawg-io/homeassistant-fluxcd/releases)
+[![License](https://img.shields.io/github/license/dawg-io/homeassistant-fluxcd?style=for-the-badge&color=green)](https://github.com/dawg-io/homeassistant-fluxcd/blob/main/LICENSE)
+![GitHub all releases](https://img.shields.io/github/downloads/dawg-io/homeassistant-fluxcd/total?style=for-the-badge&color=gray)
+![Tracked Installs](https://img.shields.io/endpoint?url=https://analytics.home-assistant.io/api/badge_custom_integrations_json/fluxcd_k8s.json&style=for-the-badge&logo=home-assistant&label=Tracked%20Installs&color=gray)
+
 A custom Home Assistant integration that monitors **FluxCD resources in Kubernetes** using **kubernetes-asyncio**. It exposes FluxCD resource status as Home Assistant sensor entities, each appearing as its own top-level device in the HA device registry.
 
 ## Contents
